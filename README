@@ -1,0 +1,44 @@
+# IBB MCU
+
+## What is the ibb_mcu repository?
+
+The IBB MCU repository (ibb_mcu) contains the software and tools for the VIBB Frontend MCU.
+
+### Structure
+
+rpm - *indicates whether the tool is included in the generated rpm*
+
+- Source Code */src* (rpm)
+- Tools */tools*
+  - Calibration (rpm): *Used to calibrate TX and RX*
+  - Configuration (rpm): *Used to configure the IP settings*
+  - Find devices: *Used to find all MCUs within the network*
+  - Upgrade (rpm): *Wrapper around the fwupgr tool to upgrade the MCU to the SREC file within the rpm*
+
+## How to make the rpm?
+
+To make the rpm execute:
+
+    ./rpm_make.sh
+
+Export the rpm to the release folder **/data/projects/ALL/RPMS/ibb_mcu** by executing:
+
+    ./rpm_export.sh
+
+## Building the .srec (image) file manually
+
+NOTE: Only do this for **debugging purposes**.
+
+Create the build directory and enter it:
+
+    mkdir build
+    cd build
+
+Run CMAKE and make:
+
+    cmake ..
+    make
+
+If by accident CMAKE was done in the toplevel directory run the following command:
+
+    rm -rf CMakeCache.txt CMakeFiles Makefile cmake_install.cmake
