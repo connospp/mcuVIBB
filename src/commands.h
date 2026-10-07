@@ -102,6 +102,8 @@ void UART_execute_cmd(void);
 uint8_t eth_recv_command(uint8_t *RX_data);
 void CID_returnEthConfig();
 
+void dump_calibration_table(const char *label,uint8_t chain);
+
 
 
 #endif /* COMMANDS_H */

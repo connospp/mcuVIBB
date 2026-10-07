@@ -8,6 +8,7 @@ volatile bool uart_line_ready = false;
 
 volatile bool eth_reset_pressed = false;
 volatile uint32_t eth_reset_pressed_time = 0;
+volatile uint32_t eth_activity_tracking = 0;
 volatile uint32_t timer_ticks = 0;  // Variable to track the timer ticks (in ms)
 volatile uint32_t perif_health = 0;
 
@@ -15,10 +16,17 @@ void interruptHandler()
 {
 	// Power off unit is handled directly from interrupt.
 	// Otherwise we cannot stop infinite boot bug
-	// if (int_flags.powerToggle > 0) 
+	// if (int_flags.powerToggle > 0)
 	// {
 	// 	int_flags.powerToggle = 0;
 	// }
+	if (eth_activity_tracking >= (TWO_SECONDS*15))  //Check if ethernet activity is inactive
+	{ 		
+		w5500_disconnect_then_abort(SOCKET_0,100); //Wait for 100ms for mercifull disconection else close TCP connection bruttaly
+		eth_activity_tracking = 0; 
+		int_flags.eth = 0;
+		eth_status.F_fin = 1;
+	}
 	
 	if (eth_status.reset >0)
 	{
@@ -93,7 +101,7 @@ void interruptHandler()
 		static bool LED = false;
 		perif_health = CID_health_check();
 		uint8_t color = 1; // Default color is red
-		uint32_t masked_health = perif_health & 0x7FFFF;  // Keep only bits 0�18. PSU bits not relevant
+		uint32_t masked_health = perif_health & 0x7FFFF;  // Keep only bits 0 18. PSU bits not relevant
 		
 		if(LED)
 		{
@@ -125,10 +133,10 @@ void readUartBuff()
 			uart_buffer[uart_index] = '\0';  // Null-terminate the string
 			uart_line_ready = true;         // Signal complete line
 			int_flags.uart += 1;
-		} else {
+			} else {
 			if (uart_index < UART_BUFFER_SIZE - 1) {
 				uart_buffer[uart_index++] = c;
-			} else {
+				} else {
 				uart_index = 0;  // Overflow: reset buffer
 			}
 		}
@@ -163,7 +171,7 @@ void powerHandling()
 				manual_delay++;
 				
 				if (UCSR0A & (1 << RXC0)) {
-					uint8_t received_byte = UDR0;					
+					uint8_t received_byte = UDR0;
 					
 					if (local_uart_index < UART_BUFFER_SIZE - 1) { //Check UART command for reboot
 						received_byte = toupper((unsigned char)received_byte);  // Convert to uppercase
@@ -186,6 +194,35 @@ void powerHandling()
 	}
 }
 
+void RebootHandling()
+{
+	static uint32_t manual_delay = 0; //required since timers wont run while waiting for for unit to power on
+	static bool allow_powerOn = false;
+
+	if (timer_ticks >= TWO_SECONDS) {
+		timer_ticks = 0; // Reset timer
+		manual_delay = 0;
+		
+		if (PINL & (1 << REST.PSU_CONTROL.PIN)) {
+			
+			w5500_disconnect_then_abort(SOCKET_0,500); //Wait for 500ms for mercifull disconection else close TCP connection bruttaly
+			*REST.PSU_CONTROL.PORT &= ~(1 << REST.PSU_CONTROL.PIN);
+			configure_ports_low(); // Avoid leakage 5V
+			
+			
+			while (1) {
+				wdt_reset();  // Kick the dog
+				
+				manual_delay++;
+				
+				if(manual_delay >= MANUAL_DELAY_2SEC)
+				{
+					while (1);
+				}
+			}
+		}
+	}
+}
 
 void setup_ext_interrupt() {
 	// === Set INT pins as inputs ===
@@ -233,15 +270,22 @@ void setup_timer4()
 	TIMSK4 |= (1 << OCIE4A);     // Enable compare match interrupt on OCR4A
 }
 
-void setup_timer3() { //Timer 3 will trigger ADC to start converting (CNVST ADC1 PD0) every so on (AGC dependand)
+void setup_timer3() {
 	TCCR3A = 0;                          // Normal port operation
-	TCCR3B = (1 << WGM32) | (1 << CS32) | (1 << CS30); // CTC mode, Prescaler = 1024
+	TCCR3B = (1 << WGM32) | (1 << CS32) | (1 << CS30);  // CTC mode, Prescaler 1024
 	
-	//OCR3A = 77; // 5ms (16 MHz / 1024) * 0.005 - 1 = 77
-	//OCR3A = 156; // 10 ms (16 MHz / 1024) * 0.01 = 156
-	OCR3A = 233;
-	TIMSK3 |= (1 << OCIE3A);             // Enable Timer3 Compare Match A Interrupt
+	// Calculate OCR3A using integer math to avoid floating point
+	OCR3A = (uint16_t)(((uint32_t)AGC_PERIOD_MS * 15625UL + 500) / 1000) - 1;
+	
+	TCNT3 = 0;                          // Reset counter
+	
+	char buffer[64];
+	sprintf(buffer, "AGC period: %u ms | OCR3A: %u\r\n", AGC_PERIOD_MS, OCR3A);
+	UART_send_string(buffer);
+	
+	TIMSK3 |= (1 << OCIE3A);            // Enable Timer3 Compare Match A Interrupt
 }
+
 
 void delay_ms(uint16_t del_ms)
 {
@@ -279,6 +323,7 @@ void setup_timer1() {
 
 ISR(TIMER1_COMPA_vect) { //Used to avoid switch bouncing
 	timer_ticks++;
+	eth_activity_tracking++;
 	int_flags.timer++;
 }
 
@@ -310,6 +355,7 @@ ISR(INT5_vect) {
 ISR(INT7_vect)
 {
 	int_flags.eth++;
+	eth_activity_tracking = 0;
 }
 
 /**
@@ -351,7 +397,7 @@ ISR(USART0_RX_vect) {
 */
 ISR(INT0_vect)
 {
-    ;
+	;
 }
 
 /**
@@ -362,7 +408,7 @@ ISR(INT0_vect)
 */
 ISR(INT1_vect)
 {
-    ;
+	;
 }
 
 
@@ -374,7 +420,7 @@ ISR(INT1_vect)
 */
 ISR(INT4_vect)
 {
-    ;
+	;
 }
 
 /**
@@ -385,7 +431,7 @@ ISR(INT4_vect)
 */
 ISR(INT6_vect)
 {
-    ;
+	;
 }
 
 /**
@@ -396,7 +442,7 @@ ISR(INT6_vect)
 */
 ISR(TIMER2_COMPA_vect)
 {
-    ;
+	;
 }
 
 /**
@@ -418,7 +464,7 @@ ISR(TIMER2_COMPB_vect)
 */
 ISR(TIMER2_OVF_vect)
 {
-    ;
+	;
 }
 
 /**
@@ -429,7 +475,7 @@ ISR(TIMER2_OVF_vect)
 */
 ISR(TIMER1_CAPT_vect)
 {
-    ;
+	;
 }
 
 /**
@@ -440,7 +486,7 @@ ISR(TIMER1_CAPT_vect)
 */
 ISR(TIMER1_COMPB_vect)
 {
-    ; 
+	;
 }
 
 
@@ -452,7 +498,7 @@ ISR(TIMER1_COMPB_vect)
 */
 ISR(TIMER0_COMPA_vect)
 {
-    ;
+	;
 }
 
 /**
@@ -474,7 +520,7 @@ ISR(TIMER0_COMPB_vect)
 */
 ISR(TIMER0_OVF_vect)
 {
-    ;
+	;
 }
 
 /**
@@ -485,7 +531,7 @@ ISR(TIMER0_OVF_vect)
 */
 ISR(TIMER1_OVF_vect)
 {
-    ;
+	;
 }
 
 
@@ -497,7 +543,7 @@ ISR(TIMER1_OVF_vect)
 */
 ISR(SPI_STC_vect)
 {
-    ;
+	;
 }
 
 /**
@@ -508,7 +554,7 @@ ISR(SPI_STC_vect)
 */
 ISR(USART0_UDRE_vect)
 {
-    ;
+	;
 }
 
 /**
@@ -519,7 +565,7 @@ ISR(USART0_UDRE_vect)
 */
 ISR(USART0_TX_vect)
 {
-    ;
+	;
 }
 
 /**
@@ -530,7 +576,7 @@ ISR(USART0_TX_vect)
 */
 ISR(ADC_vect)
 {
-    ;
+	;
 }
 
 /**
@@ -541,7 +587,7 @@ ISR(ADC_vect)
 */
 ISR(EE_READY_vect)
 {
-    ;
+	;
 }
 
 /**
@@ -552,7 +598,7 @@ ISR(EE_READY_vect)
 */
 ISR(ANALOG_COMP_vect)
 {
-    ;
+	;
 }
 
 /**
@@ -563,7 +609,7 @@ ISR(ANALOG_COMP_vect)
 */
 ISR(TIMER1_COMPC_vect)
 {
-    ;
+	;
 }
 
 /**
@@ -574,7 +620,7 @@ ISR(TIMER1_COMPC_vect)
 */
 ISR(TIMER3_CAPT_vect)
 {
-    ;
+	;
 }
 
 /**
@@ -585,7 +631,7 @@ ISR(TIMER3_CAPT_vect)
 */
 ISR(TIMER3_COMPB_vect)
 {
-    ;
+	;
 }
 
 /**
@@ -596,7 +642,7 @@ ISR(TIMER3_COMPB_vect)
 */
 ISR(TIMER3_COMPC_vect)
 {
-    ;
+	;
 }
 
 /**
@@ -607,7 +653,7 @@ ISR(TIMER3_COMPC_vect)
 */
 ISR(TIMER3_OVF_vect)
 {
-    ;
+	;
 }
 
 /**
@@ -618,7 +664,7 @@ ISR(TIMER3_OVF_vect)
 */
 ISR(USART1_UDRE_vect)
 {
-    ;
+	;
 }
 
 /**
@@ -629,7 +675,7 @@ ISR(USART1_UDRE_vect)
 */
 ISR(USART1_TX_vect)
 {
-    ;
+	;
 }
 
 /**
@@ -640,7 +686,7 @@ ISR(USART1_TX_vect)
 */
 ISR(TWI_vect)
 {
-    ;
+	;
 }
 
 /**
@@ -651,7 +697,7 @@ ISR(TWI_vect)
 */
 ISR(SPM_READY_vect)
 {
-    ;
+	;
 }
 
 /**
@@ -662,7 +708,7 @@ ISR(SPM_READY_vect)
 */
 ISR(USART1_RX_vect)
 {
-    ;
+	;
 }
 
 

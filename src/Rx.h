@@ -28,6 +28,11 @@ struct Rx_status {
 	long double PFD;
 };
 
+#define  Subband1_END_MHz 1021
+#define  Subband2_END_MHz 2001
+#define  Subband3_END_MHz 2321 //(used to be 2301, changed to correlate with Rx cal tables)
+#define  Subband4_END_MHz 6661
+
 struct Rx_PLLs {
 	volatile uint8_t Subband;  // Subband 1�4
 	volatile long long FreqMHz;         // Frequency in Mhz*SCALE_FACTOR

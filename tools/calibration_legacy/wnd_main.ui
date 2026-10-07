@@ -53,12 +53,12 @@
          </property>
          <item>
           <property name="text">
-           <string>1</string>
+           <string>0</string>
           </property>
          </item>
          <item>
           <property name="text">
-           <string>2</string>
+           <string>1</string>
           </property>
          </item>
         </widget>
@@ -79,26 +79,6 @@
          <item>
           <property name="text">
            <string>2</string>
-          </property>
-         </item>
-         <item>
-          <property name="text">
-           <string>3</string>
-          </property>
-         </item>
-         <item>
-          <property name="text">
-           <string>4</string>
-          </property>
-         </item>
-         <item>
-          <property name="text">
-           <string>5</string>
-          </property>
-         </item>
-         <item>
-          <property name="text">
-           <string>6</string>
           </property>
          </item>
         </widget>
@@ -138,7 +118,7 @@
           </sizepolicy>
          </property>
          <property name="text">
-          <string>GPFE (Front End)</string>
+          <string>GPFE</string>
          </property>
         </widget>
        </item>

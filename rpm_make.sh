@@ -18,8 +18,12 @@ RPM_TOPDIR="${HOME}/rpm"
 
 # Build calibration tool
 $(cd tools/calibration ; ./build.sh)
+# Build legacy calibration tool (V-IBB 1.0 compatible)
+$(cd tools/calibration_legacy ; ./build.sh)
 # Build configuration tool
 $(cd tools/configuration ; ./build.sh)
+# Build legacy configuration tool (V-IBB 1.0 compatible)
+$(cd tools/configuration_legacy ; ./build.sh)
 
 # Build rpm with spec file
 rpmbuild  --define "_topdir ${RPM_TOPDIR}" -bb install/ibb_mcu.spec

@@ -46,7 +46,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=APP_DESC)
     # Required positional argument
     parser.add_argument('host', help='MCU IP address')
-    parser.add_argument('port', help='MCU port', type=int)
+    parser.add_argument('port', help='MCU port (e.g. 5000)', type=int)
     # Parse command line arguments
     args = parser.parse_args()
     # Print some information

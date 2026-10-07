@@ -15,9 +15,9 @@ void init_rx_chains() {
 	Rx_Chains.RxA.agcEnable = 0;
 	Rx_Chains.RxA.isItOn = 0;
 	Rx_Chains.RxA.health = 1;
-	Rx_Chains.RxA.currentDACValue[0] = START_DAC_VALUE;
-	Rx_Chains.RxA.currentDACValue[1] = START_DAC_VALUE;
-	Rx_Chains.RxA.currentDACValue[2] = START_DAC_VALUE;
+	Rx_Chains.RxA.currentDACValue[0] = START_RX_DAC_VALUE;
+	Rx_Chains.RxA.currentDACValue[1] = START_RX_DAC_VALUE;
+	Rx_Chains.RxA.currentDACValue[2] = START_RX_DAC_VALUE;
 	Rx_Chains.RxA.targetADC = 0x00;
 	Rx_Chains.RxA.currentADC = 0x00;
 	Rx_Chains.RxA.carrierPower= 0x00;
@@ -47,9 +47,9 @@ void init_rx_chains() {
 	Rx_Chains.RxB.agcEnable = 0;
 	Rx_Chains.RxB.isItOn = 0;
 	Rx_Chains.RxB.health = 1;
-	Rx_Chains.RxB.currentDACValue[0] = START_DAC_VALUE;
-	Rx_Chains.RxB.currentDACValue[1] = START_DAC_VALUE;
-	Rx_Chains.RxB.currentDACValue[2] = START_DAC_VALUE;
+	Rx_Chains.RxB.currentDACValue[0] = START_RX_DAC_VALUE;
+	Rx_Chains.RxB.currentDACValue[1] = START_RX_DAC_VALUE;
+	Rx_Chains.RxB.currentDACValue[2] = START_RX_DAC_VALUE;
 	Rx_Chains.RxB.targetADC = 0x00;
 	Rx_Chains.RxB.currentADC = 0x00;
 	Rx_Chains.RxB.carrierPower= 0x00;
@@ -99,7 +99,7 @@ void change_Rx_Frequency(long long freq,uint8_t Chain)
 void Calculate_Frequency_Rx(uint8_t Chain)
 {
 	struct Rx_PLLs *Rx_Ch_;
-	uint32_t ST0;//PLL2 freq - 2220MHz SB1/SB2/SB4
+	uint32_t ST0;//PLL2 freq - 2220MHz SB2/SB4
 	
 	if(Chain == 1 )
 	{
@@ -113,24 +113,24 @@ void Calculate_Frequency_Rx(uint8_t Chain)
 	
 	
 	if(Rx_Ch_->FreqMHz < 60*SCALE_FACTOR)	return;
-	else if (Rx_Ch_->FreqMHz < 1021*SCALE_FACTOR) // Sub-band 1
+	else if (Rx_Ch_->FreqMHz < Subband1_END_MHz*SCALE_FACTOR) // Sub-band 1
 	{
 		Rx_Ch_->Subband = 1;
 		ST0 = 0x03F000CE; //2060MHz
 	}
-	else if (Rx_Ch_->FreqMHz < 2001*SCALE_FACTOR) // Sub-band 2
+	else if (Rx_Ch_->FreqMHz < Subband2_END_MHz*SCALE_FACTOR) // Sub-band 2
 	{
 		Rx_Ch_->Subband = 2;
 		ST0 = 0x03F000DE; //2220MHz
 
 	}
-	else if (Rx_Ch_->FreqMHz <2301*SCALE_FACTOR) // Sub-band 3
+	else if (Rx_Ch_->FreqMHz <Subband3_END_MHz*SCALE_FACTOR) // Sub-band 3 (used to be 2301, changed to correlate with Rx cal tables)
 	{
 		Rx_Ch_->Subband = 3;
 		ST0 = 0x03F000FC; //2520MHz
 
 	}
-	else if (Rx_Ch_->FreqMHz < 6661*SCALE_FACTOR) // Sub-band 4
+	else if (Rx_Ch_->FreqMHz < Subband4_END_MHz*SCALE_FACTOR) // Sub-band 4
 	{
 		Rx_Ch_->Subband = 4;
 		ST0 = 0x03F000DE; //2220MHz

@@ -342,6 +342,8 @@ void init_w5500(uint8_t socket)
 	do{
 		w5500_spi(Sn_SR(socket), _W5500_SPI_READ_, readbuffer, 2);
 	}while (readbuffer[1] != SOCK_LISTEN); //check/wait if status changed to LISTEN
+	
+	tx.TxA.failedADCattempts = tx.TxA.FaultyChain = tx.TxB.failedADCattempts = tx.TxB.FaultyChain = 0; //Reset faulty state of chains. Dont reenable AGC, in case unit is in Loopback mode
 }
 
 

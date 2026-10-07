@@ -113,6 +113,9 @@ void readRXPower()
 		Rx_Chains.RxB.currentADC = readings[1];
 	}
 	
+	// Clear FIFO after reading to avoid stale data in next read.
+	// SPI_send8(SPI_GPIOs.ADC_RX.CS_PORT,SPI_GPIOs.ADC_RX.CS_PIN,MAX11636_CLR_FIFO_CMD);
+
 	//if(Rx_Chains.RxB.currentADC == 0 || Rx_Chains.RxA.currentADC == 0)
 	//{
 	//char buf[48]; // Enough for -2,147,483,648 plus null terminator
@@ -168,16 +171,22 @@ void readTXPower()
 		tx.TxA.currentADC = readings[0];
 		tx.TxB.currentADC = readings[1];
 	}
-	
 }
 
-uint8_t read_id_adc()
+
+/**
+* @brief If previous ADC readings were faulty, will reflect in health.
+*
+* @return uint8_t
+*/
+uint8_t check_adc_health()
 {
 	//uint16_t readingRx = 0x00;
-	uint8_t response = 0;	
-	
-	if (tx.TxA.currentADC != 0xFFFF && tx.TxA.currentADC != 0x0000) { //Anything but 0x00 and 0xFFFF is considered as PASS
-		response |= (1 << 0);  // Set bit 0
+	uint8_t response = 0;
+
+	if (tx.TxA.FaultyChain < 1 && tx.TxB.FaultyChain < 1) //IF ADC reading lower than value. Possible issue with ADC or Log detector
+	{
+		response |= (1 << 0); 
 	}
 	
 	//*SPI_GPIOs.ADC_RX.CS_PORT &= ~(1 << SPI_GPIOs.ADC_RX.CS_PIN);  // Set PH7 (CS) Low

@@ -49,6 +49,7 @@ void correctionloopTx(uint8_t Chain);
 void correctionloopRx(uint8_t Chain);
 void write_calibration_points_to_eeprom(uint8_t chain); //RX calibration points
 void reset_tx_calibration(uint8_t chain);
+void set_min_allowed_adc(uint8_t chain); // Sets min allowed ADC return before trickering chain shutdown
 
 
 #endif /* AGC_H_ */

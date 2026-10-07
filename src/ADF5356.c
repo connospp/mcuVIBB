@@ -57,7 +57,7 @@ uint16_t setup_ADF(t_ADF5352 *activePLL)
 		SPI_send32(activePLL->PortCS,activePLL->CS,0x00000022);
 		delay_us(ADF_DELAY_US);
 		SPI_send32(activePLL->PortCS,activePLL->CS,0x00000001);
-		delay_us(ADF_DELAY_US);
+		delay_ms(1); // required by specidic IC
 		SPI_send32(activePLL->PortCS,activePLL->CS,R0_temp);
 		delay_ms(FLAG_RESPONSE_WAIT_ms);
 		

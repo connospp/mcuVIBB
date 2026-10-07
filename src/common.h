@@ -23,37 +23,45 @@
 #include <util/delay.h>
 #include <stdint.h>
 
-// scale factor for frequency calculations
-#define SCALE_FACTOR 100000
 //Convert float to int and round up/down to closest int
 #define FLOAT_TO_INT(x) ((x) >= 0 ? (int)((x) + 0.5) : (int)((x)-0.5))
-//PLL WAIT BEFORE FLAG CHECK
-#define FLAG_RESPONSE_WAIT_ms 5
+
+// scale factor for frequency calculations
+#define SCALE_FACTOR 100000
+
+#define FLAG_RESPONSE_WAIT_ms 5 //PLL WAIT BEFORE FLAG CHECK
 //Tested with 8MHz SPI clock and minimum required is 4ms delay
-#define EEPROM_DELAY 5
+#define EEPROM_DELAY 7 //PLL WAIT BEFORE FLAG CHECK
+
+#define AGC_PERIOD_MS 15 //AGC iteration time
+#define AGC_FAULT_DELAY_MS 333 // AGC max time to call chain as "failed"
+#define AGC_MAX_FAILED_ATTEMPTS (AGC_FAULT_DELAY_MS / AGC_PERIOD_MS) //Number of iterations based on period
+#define PERCENTAGE_ADC_ALLOWED 5 //Percentage allowed before failsafe triggers
 
 /***************** DAC LIMITS *****************************/
-#define DAC_MIN 750 //Min DAC to target VVA F2480 linearity 956
-#define DAC_MAX 3000 //Max DAC to target VVA F2480 linearity 2458
-#define START_DAC_VALUE DAC_MIN //Start Value must be between DAC_MAX and DAC_MIN 
+#define DAC_MIN_TX 0    //Min DAC Tx
+#define DAC_MAX_TX 4095 //Max DAC Tx
+#define DAC_RESET_VALUE 1950 //For Tx only Default value to be set when enabling chain. Avoid starting from zero to avoid detected as faulty chain
+#define DAC_LOOP_TX 2300 //Fixed value for when the unit is in loop mode. No log detector on loop back
+
+#define DAC_MAX_RX 3000  //Max DAC to target VVA F2480 linearity 2458
+#define DAC_MIN_RX 750  //Min DAC to target VVA F2480 linearity 956
+
+#define START_RX_DAC_VALUE DAC_MIN_RX //Start Value must be between DAC_MAX and DAC_MIN
+#define START_TX_DAC_VALUE DAC_MIN_TX //Start Value must be between DAC_MAX and DAC_MIN 
 /**************************************************/
 
-/***************** AGC default **********************/
+/***************** Default Frequencies **********************/
 #define START_RX_FREQ 228300000LL   // 2283.0 MHz * SCALE_FACTOR
 #define START_TX_FREQ  84150000LL   // 841.5 MHz * SCALE_FACTOR
 
-/********************** TX AGC TABLE ******************/
+/********************** EEPROM TABLE ******************/
 #define START_FREQ_MHZ     60
 #define STEP_FREQ_MHZ_TX      22 //Start 60Mhz with 22MHz step, gives a range 60MH-4110MHz
 #define STEP_FREQ_MHZ_RX      33 //Start 60Mhz with 33MHz step, gives a range 60MH-6135MHz
 #define NUM_POINTS         11
 #define TABLE_SIZE_BYTES  352
 #define NUM_CAL_TABLES    186
-#define DAC_STEP_BIGGEST 4095
-//#define DAC_STEP_BIG 250
-//#define DAC_STEP_MID 35
-#define DAC_STEP_SMALL 1
-
 
 /******************** CONFIGURABLE VARIABLES *******************************/
 #ifndef VERSION_N1
@@ -89,6 +97,7 @@ typedef union {
 #define ADDR_SIZE 4
 #define LEN_SIZE 2
 #define CAL_TABLE_SIZE NUM_POINTS
+#define FREQ_TABLE_SIZE sizeof(freqTable.N) / sizeof(freqTable.N[0])
 
 /* message variables */
 char cmd[MAX_CMD_SIZE];
@@ -106,6 +115,7 @@ uint8_t cmd_i;
 #define sn1_p ((void *)0x0050)
 #define sn2_p ((void *)0x0060)
 #define fwupgr_p ((void *)0x0070)
+#define gstarRxBackup ((void *)0x0100) //There is a possibility for Rx EEPROM getting corrupte. We are saving gstart values in MCU EEPROM so we can easilly recover them without recall
 
 volatile short_msg_t temperature;
 

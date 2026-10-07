@@ -16,12 +16,14 @@ struct Tx_chains tx = {
 		.isItOn = 0,
 		.health = 2,
 		.targetADC = 0x00,
+		.minAllowedADC = 0x00,
 		.carrierPower = -100,
 		.agcEnable = 0,
-		.currentDACValue={START_DAC_VALUE,START_DAC_VALUE,START_DAC_VALUE},
-		//.CS = {PH5,PH5,PH5}; --> INIT IN void init_tx_chains()
-		//.PortFlag = {&PORTH,&PORTH,&PORTH}; --> INIT IN void init_tx_chains()
-		.dacChan={0,1,2}
+		.currentDACValue={START_TX_DAC_VALUE,START_TX_DAC_VALUE,START_TX_DAC_VALUE},
+		.failedADCattempts =0, // Counter that counts how many times ADC values were found to be under min allowed
+		.dacChan={0,1,2},
+		.FaultyChain = 0, // 0-> OK 1-> FAULT
+		.uncalibratedFreq = 0
 	},
 	
 	.TxB = {
@@ -30,12 +32,13 @@ struct Tx_chains tx = {
 		.isItOn = 0,
 		.health = 2,
 		.targetADC = 0x00,
+		.minAllowedADC = 0x00,
 		.carrierPower = -200,
 		.agcEnable = 0,
-		.currentDACValue={START_DAC_VALUE,START_DAC_VALUE,START_DAC_VALUE},
-		//.CS = {PH4,PH4,PH4}; INIT IN void init_tx_chains()
-		//.PortFlag = {&PORTH,&PORTH,&PORTH}; INIT IN void init_tx_chains()
-		.dacChan={3,0,1}
+		.currentDACValue={START_TX_DAC_VALUE,START_TX_DAC_VALUE,START_TX_DAC_VALUE},
+		.failedADCattempts =0, // Counter that counts how many times ADC values were found to be under min allowed
+		.dacChan={3,0,1},
+		.uncalibratedFreq = 0
 	}
 };
 
@@ -162,7 +165,7 @@ void Calculate_Frequency_LogDet(uint8_t Chain)
 }
 
 void Calculate_Frequency_Tx(uint8_t Chain)
-{	
+{
 	struct Tx_status *SelectedChain;
 	t_ADF5352 *_8_12_PLL;
 	t_STW *_3G_PLL;
@@ -200,8 +203,16 @@ void Calculate_Frequency_Tx(uint8_t Chain)
 	
 	if(_3G_PLL->FreqMHz < 165*SCALE_FACTOR || _3G_PLL->FreqMHz > 415*SCALE_FACTOR) return; //Invalid frequencies
 	
+	uint8_t attempts = 0;
 	do{
 		Calculate_STW(_3G_PLL); //Setup and Lock PLLC
+		
+		attempts++;
+		delay_ms(FLAG_RESPONSE_WAIT_ms);
+		if (attempts >= 10) {
+			UART_send_string("ERROR: STW 3.5G PLL failed to lock\r\n");
+			break;
+		}
 	}while((*LockFlagPort & (1 << (LockFlag))) == 0); //Check second flag
 	
 	setRheoAt(ADF_N);
@@ -209,57 +220,74 @@ void Calculate_Frequency_Tx(uint8_t Chain)
 
 void setRheoAt(uint16_t ADF_N)
 {
-	  uint16_t Rheo = 0;
-	  float Att = 0;
-	  int found = 0;
+	uint16_t Rheo = 0;
+	float Att = 0;
+	int found = 0;
 
-	  for (int i = 0; i < CAL_TABLE_SIZE; i++) {
-		  if (freqTable.N[i] == ADF_N) {
-			  Att = freqTable.ATT[i];
-			  Rheo = freqTable.RHE[i];
-			  found = 1;
-			  break;
-		  }
-	  }
+	for (int i = 0; i < CAL_TABLE_SIZE; i++) {
+		if (freqTable.N[i] == ADF_N) {
+			Att = freqTable.ATT[i];
+			Rheo = freqTable.RHE[i];
+			found = 1;
+			break;
+		}
+	}
 
-	  if (!found) {
-		  return; // ADF_N not found in table
-	  }
+	if (!found) {
+		return; // ADF_N not found in table
+	}
 
-	  uint8_t atten_value = ((uint8_t)(Att * 4)) & 0x7F;
-	  uint16_t reg_value = (uint16_t)atten_value;
-	  SPI_send16_LSB_First(Rf_PLL.Master1.Port_CS_ATT_QPC, Rf_PLL.Master1.CS_ATT_QPC, reg_value);
+	uint8_t atten_value = ((uint8_t)(Att * 4)) & 0x7F;
+	uint16_t reg_value = (uint16_t)atten_value;
+	SPI_send16_LSB_First(Rf_PLL.Master1.Port_CS_ATT_QPC, Rf_PLL.Master1.CS_ATT_QPC, reg_value);
 
-	  uint16_t percent_value = (((uint32_t)Rheo * 1023) / 100) & 0x03FF;
-	  reg_value = (0x01 << 10) | percent_value;
+	uint16_t percent_value = (((uint32_t)Rheo * 1023) / 100) & 0x03FF;
+	reg_value = (0x01 << 10) | percent_value;
 
-	  SPCR |= (1 << CPHA);
-	  delay_us(10);
-	  SPI_send16(Rf_PLL.Master1.Port_CS_REO_AD5270, Rf_PLL.Master1.CS_REO_AD5270, reg_value);
-	  delay_us(10);
-	  SPCR &= ~(1 << CPHA);
+	SPCR |= (1 << CPHA);
+	delay_us(10);
+	SPI_send16(Rf_PLL.Master1.Port_CS_REO_AD5270, Rf_PLL.Master1.CS_REO_AD5270, reg_value);
+	delay_us(10);
+	SPCR &= ~(1 << CPHA);
 }
 
 void setTxPath(uint8_t path, uint8_t chain) //0 Loop, 1 Main AGC not turned ON automatically. Must be done manually
 {
-		if(chain == 1)
+	if(chain == 1)
 	{
-		tx.TxA.Output = path;
+		tx.TxA.Output = path; // Save current state
 		if(path == 0)
-		{			
+		{
+			tx.TxA.currentDACValue[0] = tx.TxA.currentDACValue[1] = tx.TxA.currentDACValue[2] = DAC_LOOP_TX; // NO AGC on loopback so we set power to fix value
+			setupDACTxA();
+			
+			tx.TxA.agcEnable = 0;//LogDetector is located on the Main output. Hence no effect on internal loop and causes to amplify leakage
+			//and causes a big spike on the output when returning to main loop
 			*REST.TXA_LOOP_SW.PORT |= (1 << REST.TXA_LOOP_SW.PIN);
 			return;
 		}
+		tx.TxA.currentDACValue[0] = tx.TxA.currentDACValue[1] = tx.TxA.currentDACValue[2] = DAC_RESET_VALUE; // Before enabling AGC, Reset DAC value to avoid tripping log det fault
+		setupDACTxA();
+		
+		tx.TxA.agcEnable = 1;
 		*REST.TXA_LOOP_SW.PORT &= ~(1 << REST.TXA_LOOP_SW.PIN);
 	}
 	else
 	{
 		tx.TxB.Output = path;
 		if(path == 0)
-		{			
+		{
+			tx.TxB.currentDACValue[0] = tx.TxB.currentDACValue[1] = tx.TxB.currentDACValue[2] = DAC_LOOP_TX; // NO AGC on loopback so we set power to fix value
+			setupDACTxB();
+			
+			tx.TxB.agcEnable = 0;
 			*REST.TXB_LOOP_SW.PORT |= (1 << REST.TXB_LOOP_SW.PIN);
 			return;
 		}
+		tx.TxB.currentDACValue[0] = tx.TxB.currentDACValue[1] = tx.TxB.currentDACValue[2] = DAC_RESET_VALUE; // Before enabling AGC, Reset DAC value to avoid tripping log det fault
+		setupDACTxB();
+		
+		tx.TxB.agcEnable = 1;
 		*REST.TXB_LOOP_SW.PORT &= ~(1 << REST.TXB_LOOP_SW.PIN);
 	}
 }

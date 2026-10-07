@@ -3,9 +3,9 @@
 #
 #                   C E L E S T I A    A N T W E R P   (c)
 #
-# A simple to use MCU calibration tool
+# A simple to use MCU calibration (legacy) tool for V-IBB 1.0
 #
-# Author:   Magdy Abdel / Nico Henriques da Silva
+# Author:   Magdy Abdel
 # Created:  13.10.2022
 # Version:  v0.1.0
 #
@@ -13,13 +13,11 @@
 #   v0.1.0 Initial version 
 #   v0.2.0 Added RX calibration
 #   v0.3.0 Added save and load features
-#   v0.4.0 Added 6 additional TX calibration points
-#   v0.5.0 Changed to 11 TX calibration points with different DAC values
 #
 ##
-APP_NAME = 'MCU Calibration'
+APP_NAME = 'MCU Calibration (legacy)'
 APP_DESC = 'A simple to use MCU calibration tool'
-VERS = '0.5.0'
+VERS = '0.3.0'
 YEAR = 2022
 
 import logging
@@ -60,32 +58,28 @@ GPFE_PORT = 12000
 # GPFE user password
 GPFE_PASS = 'mahakala'
 
-# List of default DAC values to be calibrated (Globalstar -30 to 0 dBm)
+# List of default DAC values to be calibrated
 DAC = [
     '0000',
-    '07B0',
-    '07D9',
-    '07FF',
-    '0829',
-    '0860',
-    '08A0',
-    '08D0',
-    '0912',
-    '093A',
+    '053A',
+    '0715',
+    '0900',
+    '0A10',
+    '0DA0',
     '0FFF'
 ]
 
 # Dictionary with MCU commands
 MCU_CMD = {
     'version':      'version',
-    'agc':          'agc {}',                                             # enable/disable
-    'sn':           'sn{}',                                               # chain(1/2)
-    'setdac':       'dac {} {} {} {}',                                    # chain(0/1) direct(tx/rx) DAC_ID(0,1,2) val(2Bhex)
-    'getadc':       'adc {} {}',                                          # chain(0/1) direct(tx/rx)
-    'readsetpt':    'setpoint {} {}',                                     # chain(0/1) direct(tx/rx)
-    'setagcpar':    'agcpar {} {} {} {} {}',                              # chain(0/1) direct(tx/rx) rxoffset(2Bint) setpoint(2Buint) timeconstant(2Buint) 
-    'cal':          'txcal {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {}',   # chain(0/1) 11x[lvl(2Bhex,cBm) adc(2Bhex)]
-    'resetcal':     'resetcal {}',                                        # chain(0/1)
+    'agc':          'agc {}',                                               # enable/disable
+    'sn':           'sn{}',                                                 # chain(1/2)
+    'setdac':       'dac {} {} {}',                                         # chain(0/1) direct(tx/rx) val(2Bhex)
+    'getadc':       'adc {} {}',                                            # chain(0/1) direct(tx/rx)
+    'readsetpt':    'setpoint {} {}',                                       # chain(0/1) direct(tx/rx)
+    'setagcpar':    'agcpar {} {} {} {} {}',                                # chain(0/1) direct(tx/rx) rxoffset(2Bint) setpoint(2Buint) timeconstant(2Buint) 
+    'cal':          'txcal {} {} {} {} {} {} {} {} {} {} {} {} {} {} {}',   # chain(0/1) 7x[lvl(2Bhex,cBm) adc(2Bhex)]
+    'resetcal':     'resetcal {}',                                          # chain(0/1)
 }
 TX = 'tx'
 RX = 'rx'
@@ -107,12 +101,6 @@ class GPFE():
 
     # Configure GPFE connection
     def configure(self, instance:int, chain:int, user:str=None, password:str=GPFE_PASS):
-        logger.info(f"Configure command got chain {chain}")
-        if chain % 2 == 1:
-            chain = 0
-        else:
-            chain = 1
-        logger.info(f"Chain got converted to {chain}")
         self.instance = instance
         self.chain = chain
         self.user = user if user else f'chain{self.chain + 2*self.instance-1}'
@@ -133,7 +121,7 @@ class GPFE():
             try:
                 self.sock[session].connect((self.addr, self.port))
             except socket.error as err:
-                logger.error(f"Unable to connect with gpfe ({self.addr}:{self.port}) to set up {session} session. Is it running?")
+                logger.error(f"Unable to connect with gpfe ({self.addr}:{self.port}) to set up {session} session")
                 self.sock[session] = None
                 result = False
                 break
@@ -180,9 +168,9 @@ class GPFE():
         self.get_response(self.sock['mon'])
         self.send_msg(self.sock['mon'], f"sys0 +disp")
         self.send_msg(self.sock['ctl'], f"sys0 fe {msg}")
-        self.send_msg(self.sock['ctl'], f"-mod sys0")
         time.sleep(0.5)
         response = self.send_msg(self.sock['mon'], f"sys0 -disp")
+        self.send_msg(self.sock['ctl'], f"-mod sys0")
         self.get_response(self.sock['mon'])
         return response
 
@@ -301,7 +289,7 @@ class MainWindow(QMainWindow):
         # Validator for timeconstant (in ms): 20ms .. 10000ms
         val_timeconst = QIntValidator(20, 10000, self)
 
-        # Add 13 TX calibration rows
+        # Add 7 TX calibration rows
         for i in range(0, len(DAC), 1):
             # Create line edits
             line_dac = QLineEdit(self.ui.grp_table)
@@ -382,92 +370,88 @@ class MainWindow(QMainWindow):
         # Only activate row by row after clicking next (disable previous row).
         # Clicking 'Set DAC' sets the DAC and measures the ADC, output level is 
         # manually written, click next to move on to next row.
-        # After all 11 points are measured, enable calibrate button.
+        # After all 7 points are measured, enable calibrate button.
         # Clicking calibrate will send the calibration table to the MCU.
         
         self.resize(self.sizeHint())
 
     # Callback that handles connecting to or disconencting from the GPFE and setting up GUI and environment
     def connect_to_gpfe(self):
-        try:
-            if self.ui.btn_connect.text() == 'Connect':
-                self.gpfe.configure(int(self.ui.combo_gpfe.currentText()), int(self.ui.combo_chain.currentText()))
-                self.status.con_gpfe = self.gpfe.connect()
-            else:
-                self.gpfe.close()
-                self.status.con_gpfe = False
+        if self.ui.btn_connect.text() == 'Connect':
+            self.gpfe.configure(int(self.ui.combo_gpfe.currentText()), int(self.ui.combo_chain.currentText()))
+            self.status.con_gpfe = self.gpfe.connect()
+        else:
+            self.gpfe.close()
+            self.status.con_gpfe = False
 
-            version = None
-            if self.status.con_gpfe:
-                version = self.gpfe.send_mcu_msg(MCU_CMD['version'])
-            if version != None:
-                vers = self.gpfe.get_values(version.decode(), 'fe_version')
-                self.mcu.version = f"{vers[1]}.{vers[2]}.{vers[3]}"
-                self.status.con_mcu = True
-                # Disable GPFE and chain fields
-                self.ui.combo_gpfe.setEnabled(False)
-                self.ui.combo_chain.setEnabled(False)
-                self.ui.btn_connect.setText('Disconnect')
-                # Enable AGC so we know what state the AGC is in since we cannot request it
-                self.gpfe.send_mcu_msg(MCU_CMD['agc'].format('enable' if self.mcu.agc else 'disable'))
-                # Enable RX calibration fields and buttons
-                self.ui.line_carlvl1.setEnabled(True)
-                self.ui.line_carlvl2.setEnabled(True)
-                self.ui.line_timeconst.setEnabled(True)
-                self.ui.btn_rxcal.setEnabled(True)
-                # Enable agc button
-                self.ui.btn_setagc.setEnabled(True)
-            else:
-                self.status.con_mcu = False
-                self.mcu.reset()
-                # Enable GPFE and chain fields and disable agc button
-                self.ui.combo_gpfe.setEnabled(True)
-                self.ui.combo_chain.setEnabled(True)
-                self.ui.btn_connect.setText('Connect')
-                self.ui.btn_setagc.setText('Disable AGC')
-                self.ui.btn_setagc.setEnabled(False)
-                # Disable calibration fields and reset everything
-                #Handle TX calibration
-                # Calibration not active
-                self.cal_row = -1
-                for i in range(0, len(DAC), 1):
-                    self.dac[i].setEnabled(False)
-                    # Uncomment next line if you want to reset DAC values to default ones
-                    # self.dac[i].setText(DAC[i])
-                    self.adc[i].clear()
-                    self.olvl[i].setEnabled(False)
-                    self.olvl[i].clear()
-                self.ui.btn_prev.setEnabled(False)
-                self.ui.btn_next.setEnabled(False)
-                self.ui.btn_setdac.setEnabled(False)
-                self.ui.btn_cali.setEnabled(False)
-                self.ui.btn_reset.setEnabled(False)
-                #Handle RX calibration
-                # self.ui.line_setpt.setEnabled(False)
-                # self.ui.line_setpt.clear()
-                self.ui.btn_readsetpt.setEnabled(False)
-                self.ui.btn_clrsetpt.setEnabled(False)
-                self.ui.btn_setpt.setEnabled(False)
-                self.ui.line_carlvl1.setEnabled(False)
-                self.ui.line_carlvl2.setEnabled(False)
-                self.ui.line_carlvl1.clear()
-                self.ui.line_carlvl2.clear()
-                self.ui.line_difoffset1.clear()
-                self.ui.line_difoffset2.clear()
-                self.ui.line_meandiff.clear()
-                self.ui.line_offset.clear()
-                self.ui.line_timeconst.setEnabled(False)
-                self.ui.line_timeconst.setText('1000')
-                self.ui.btn_rxcal.setEnabled(False)
+        version = None
+        if self.status.con_gpfe:
+            version = self.gpfe.send_mcu_msg(MCU_CMD['version'])
+        if version != None:
+            vers = self.gpfe.get_values(version.decode(), 'fe_version')
+            self.mcu.version = f"{vers[1]}.{vers[2]}.{vers[3]}"
+            self.status.con_mcu = True
+            # Disable GPFE and chain fields
+            self.ui.combo_gpfe.setEnabled(False)
+            self.ui.combo_chain.setEnabled(False)
+            self.ui.btn_connect.setText('Disconnect')
+            # Enable AGC so we know what state the AGC is in since we cannot request it
+            self.gpfe.send_mcu_msg(MCU_CMD['agc'].format('enable' if self.mcu.agc else 'disable'))
+            # Enable RX calibration fields and buttons
+            self.ui.line_carlvl1.setEnabled(True)
+            self.ui.line_carlvl2.setEnabled(True)
+            self.ui.line_timeconst.setEnabled(True)
+            self.ui.btn_rxcal.setEnabled(True)
+            # Enable agc button
+            self.ui.btn_setagc.setEnabled(True)
+        else:
+            self.status.con_mcu = False
+            self.mcu.reset()
+            # Enable GPFE and chain fields and disable agc button
+            self.ui.combo_gpfe.setEnabled(True)
+            self.ui.combo_chain.setEnabled(True)
+            self.ui.btn_connect.setText('Connect')
+            self.ui.btn_setagc.setText('Disable AGC')
+            self.ui.btn_setagc.setEnabled(False)
+            # Disable calibration fields and reset everything
+            #Handle TX calibration
+            # Calibration not active
+            self.cal_row = -1
+            for i in range(0, len(DAC), 1):
+                self.dac[i].setEnabled(False)
+                # Uncomment next line if you want to reset DAC values to default ones
+                # self.dac[i].setText(DAC[i])
+                self.adc[i].clear()
+                self.olvl[i].setEnabled(False)
+                self.olvl[i].clear()
+            self.ui.btn_prev.setEnabled(False)
+            self.ui.btn_next.setEnabled(False)
+            self.ui.btn_setdac.setEnabled(False)
+            self.ui.btn_cali.setEnabled(False)
+            self.ui.btn_reset.setEnabled(False)
+            #Handle RX calibration
+            # self.ui.line_setpt.setEnabled(False)
+            # self.ui.line_setpt.clear()
+            self.ui.btn_readsetpt.setEnabled(False)
+            self.ui.btn_clrsetpt.setEnabled(False)
+            self.ui.btn_setpt.setEnabled(False)
+            self.ui.line_carlvl1.setEnabled(False)
+            self.ui.line_carlvl2.setEnabled(False)
+            self.ui.line_carlvl1.clear()
+            self.ui.line_carlvl2.clear()
+            self.ui.line_difoffset1.clear()
+            self.ui.line_difoffset2.clear()
+            self.ui.line_meandiff.clear()
+            self.ui.line_offset.clear()
+            self.ui.line_timeconst.setEnabled(False)
+            self.ui.line_timeconst.setText('1000')
+            self.ui.btn_rxcal.setEnabled(False)
 
-            logger.info(f"GPFE:\t{self.gpfe.addr}:{self.gpfe.port} ({'Connected' if self.status.con_gpfe else 'Disconnected'})")
-            logger.info(f"CHAIN:\t{self.gpfe.chain}")
-            logger.info(f"MCU:\tv{self.mcu.version} ({'Connected' if self.status.con_mcu else 'Disconnected'})")
+        logger.info(f"GPFE:\t{self.gpfe.addr}:{self.gpfe.port} ({'Connected' if self.status.con_gpfe else 'Disconnected'})")
+        logger.info(f"CHAIN:\t{self.gpfe.chain}")
+        logger.info(f"MCU:\tv{self.mcu.version} ({'Connected' if self.status.con_mcu else 'Disconnected'})")
 
-            self.status.update()
-        except Exception as e:
-            logger.error(f"Error while connecting/disconnecting to/from GPFE: {e}")
-            raise(e)
+        self.status.update()
 
     # Callback that handles enabling/disabling the AGC
     def set_agc(self):
@@ -483,7 +467,7 @@ class MainWindow(QMainWindow):
         self.ui.btn_setagc.setText(f"{'Enable' if not self.mcu.agc else 'Disable'} AGC")
         # Enable calibration fields
         #TX
-        if self.cal_row == -1: self.goto_next()
+        if self.cal_row is -1: self.goto_next()
         self.ui.btn_setdac.setEnabled(True)
         self.ui.btn_next.setEnabled(True)
         self.ui.btn_reset.setEnabled(True)
@@ -502,12 +486,10 @@ class MainWindow(QMainWindow):
 
     # Callback that handles sending TX DAC value to MCU
     def set_tx_dac(self):
-        if self.cal_row == -1: return
+        if self.cal_row is -1: return
         # Set DAC
         logger.info(f"Setting DAC to {self.dac[self.cal_row].text()}")
-        self.gpfe.send_mcu_msg(MCU_CMD['setdac'].format(self.gpfe.chain, TX, 0, self.dac[self.cal_row].text()))
-        self.gpfe.send_mcu_msg(MCU_CMD['setdac'].format(self.gpfe.chain, TX, 1, self.dac[self.cal_row].text()))
-        self.gpfe.send_mcu_msg(MCU_CMD['setdac'].format(self.gpfe.chain, TX, 2, self.dac[self.cal_row].text()))
+        self.gpfe.send_mcu_msg(MCU_CMD['setdac'].format(self.gpfe.chain, TX, self.dac[self.cal_row].text()))
         # Get measured ADC
         adc = self.get_tx_adc()
         self.adc[self.cal_row].setText(adc)
@@ -523,18 +505,7 @@ class MainWindow(QMainWindow):
                 logger.debug(f"adc[{i}] {adc[i]}")
             time.sleep(0.1)
         # Calculate mean ADC from last three ADC values
-        max_tries = 3
-        current_try = 0
-        while current_try < max_tries:
-            current_try += 1
-            no_problem = True
-            try:
-                adc_mean = sum([int.from_bytes(bytes.fromhex(a), byteorder='big', signed=True) for a in adc[-3:]])//len(adc[-3:]) # Convert to integers first
-            except Exception as e:
-                print(f"Problem getting adc_mean: {e}")
-                no_problem = False
-            if no_problem: break
-            
+        adc_mean = sum([int.from_bytes(bytes.fromhex(a), byteorder='big', signed=True) for a in adc[-3:]])//len(adc[-3:]) # Convert to integers first
         adc_mean = adc_mean.to_bytes(length=2, byteorder='big', signed=True).hex() # Convert back to hex
         logger.debug(f"adc[mean] {adc_mean}")
         return adc_mean
@@ -545,7 +516,7 @@ class MainWindow(QMainWindow):
 
     # Callback that handles going to next TX calibration row
     def goto_next(self):
-        if self.cal_row != -1 and (self.adc[self.cal_row].text() == '' or self.olvl[self.cal_row].text() == ''): return
+        if self.cal_row is not -1 and (self.adc[self.cal_row].text() == '' or self.olvl[self.cal_row].text() == ''): return
         # Increase row
         self.cal_row += 1
         # Disable fields
@@ -562,8 +533,7 @@ class MainWindow(QMainWindow):
             self.ui.btn_setagc.setEnabled(True)
         else:
             # Enable fields
-            if self.cal_row == 0 or self.cal_row == len(DAC)-1: self.dac[self.cal_row].setEnabled(False)
-            else: self.dac[self.cal_row].setEnabled(True)
+            self.dac[self.cal_row].setEnabled(True)
             self.olvl[self.cal_row].setEnabled(True)
 
     # Callback that handles TX calibration
@@ -576,7 +546,7 @@ class MainWindow(QMainWindow):
             if adc[i] is None or olvl[i] is None: 
                 logger.error(f"Unable to calibrate TX: Missing values.")
                 return
-        cali_cmd = MCU_CMD['cal'].format(self.gpfe.chain, olvl[0], adc[0], olvl[1], adc[1], olvl[2], adc[2], olvl[3], adc[3], olvl[4], adc[4], olvl[5], adc[5], olvl[6], adc[6], olvl[7], adc[7], olvl[8], adc[8], olvl[9], adc[9], olvl[10], adc[10])
+        cali_cmd = MCU_CMD['cal'].format(self.gpfe.chain, olvl[0], adc[0], olvl[1], adc[1], olvl[2], adc[2], olvl[3], adc[3], olvl[4], adc[4], olvl[5], adc[5], olvl[6], adc[6])
         logger.debug(f"Calibrating TX: {cali_cmd}")
         self.gpfe.send_mcu_msg(cali_cmd)
         logger.info(f"Calibrated TX!")
@@ -831,7 +801,7 @@ if __name__ == "__main__":
 
     # If no exitcodes generated start mainwindow
     wnd_main = None
-    if app_exitcode == 0:
+    if app_exitcode is 0:
         # Create and show mainwindow
         wnd_main = MainWindow()
         # Set log level

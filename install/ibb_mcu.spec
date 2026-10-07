@@ -168,9 +168,17 @@ mkdir -p %{buildroot}%{release_dir}/tools
 cp tools/calibration/dist/mcu_calibration %{buildroot}%{release_dir}/tools/mcu_calibration
 ln -s %{release_dir}/tools/mcu_calibration %{buildroot}%{bin_dir}/mcu_calibration
 
+# Copy legacy calibration tool to install location
+cp tools/calibration_legacy/dist/mcu_calibration_legacy %{buildroot}%{release_dir}/tools/mcu_calibration_legacy
+ln -s %{release_dir}/tools/mcu_calibration_legacy %{buildroot}%{bin_dir}/mcu_calibration_legacy
+
 # Copy configuration tool to install location
 cp tools/configuration/dist/mcu_configuration %{buildroot}%{release_dir}/tools/mcu_configuration
 ln -s %{release_dir}/tools/mcu_configuration %{buildroot}%{bin_dir}/mcu_configuration
+
+# Copy legacy configuration tool to install location
+cp tools/configuration_legacy/dist/mcu_configuration_legacy %{buildroot}%{release_dir}/tools/mcu_configuration_legacy
+ln -s %{release_dir}/tools/mcu_configuration_legacy %{buildroot}%{bin_dir}/mcu_configuration_legacy
 
 # Copy bootloader firmware upgrade tool to install location
 cp %{tmp_dir}/%{bootloader_repo}/fwupgr/fwupgr %{buildroot}%{release_dir}/tools/fwupgr

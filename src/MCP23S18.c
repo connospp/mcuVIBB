@@ -34,7 +34,7 @@ VoltageTranslatorStaus SPI_route ={
 };
 
 
-void EnableSPI_FOR(uint8_t route)
+void EnableSPI_FOR(uint8_t route) //Enables voltage translator for specified path. Without this, SPI signals will only reach components within the MCU board
 {
 	setupPortExpPorts(SPI_GPIOs.P_EXPANDER_E.CS_PORT, SPI_GPIOs.P_EXPANDER_E.CS_PIN,0b01000000,0b00010010,route); //Enable correct route for each
 }
@@ -97,9 +97,9 @@ void setupPortEx()
 	delay_us(1000);
 	setupPortExpPorts(SPI_GPIOs.P_EXPANDER_D.CS_PORT, SPI_GPIOs.P_EXPANDER_D.CS_PIN,INIT_CMD,GPPUB_CMD,0b11111111); //GPPUA:PULLUPS for all LEDs
 	delay_us(1000);
-	setupPortExpPorts(SPI_GPIOs.P_EXPANDER_D.CS_PORT, SPI_GPIOs.P_EXPANDER_D.CS_PIN,INIT_CMD,GPIOA_CMD,0b01010101); //All LEDs start as GREEN
+	setupPortExpPorts(SPI_GPIOs.P_EXPANDER_D.CS_PORT, SPI_GPIOs.P_EXPANDER_D.CS_PIN,INIT_CMD,GPIOA_CMD,0b00000000); //All LEDs start as OFF
 	delay_us(1000);
-	setupPortExpPorts(SPI_GPIOs.P_EXPANDER_D.CS_PORT, SPI_GPIOs.P_EXPANDER_D.CS_PIN,INIT_CMD,GPIOB_CMD,0b01010101); //All LEDs start as GREEN
+	setupPortExpPorts(SPI_GPIOs.P_EXPANDER_D.CS_PORT, SPI_GPIOs.P_EXPANDER_D.CS_PIN,INIT_CMD,GPIOB_CMD,0b00000000); //All LEDs start as OFF
 	
 	delay_us(1000);
 
@@ -111,6 +111,7 @@ void setupPortEx()
 	delay_us(1000);
 	setupPortExpPorts(SPI_GPIOs.P_EXPANDER_E.CS_PORT, SPI_GPIOs.P_EXPANDER_E.CS_PIN,INIT_CMD,GPPUB_CMD,0b00001111); //GPPUB:PULLUPS for RXA and RXB lines
 	delay_us(1000);
+	
 	setupPortExpPorts(SPI_GPIOs.P_EXPANDER_E.CS_PORT, SPI_GPIOs.P_EXPANDER_E.CS_PIN,INIT_CMD,GPIOA_CMD,SPI_route.MCU_ONLY); //Disable all voltage translators
 }
 

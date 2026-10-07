@@ -25,5 +25,6 @@ void send_uart(uint8_t data);
 void UART_send_string(const char *str);
 float extractFloat(uint8_t skipChars,volatile char uart_buffer[16]);
 long long extractFloatToLong(uint8_t skipChars,volatile char uart_buffer[16]);
+void read_uart_line(volatile char *buf, uint8_t maxlen);
 
 #endif /* UART_H_ */

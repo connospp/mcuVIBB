@@ -9,9 +9,9 @@
 //bool agcEnable = true;
 
 CalibrationTable txa_calibration_table, txb_calibration_table;
-CalibrationTable default_tx_calibration_table = { //Default Values limit the power to avoid massive spikes if uncalibrated frequency selected
+CalibrationTable default_tx_calibration_table = { //Default Values limit the power to 0dbm
 	.cbm = {100,   0,  -50, -100,-200,-300,-400,-500,-600,-700,-800},
-	.adc = {3050,2700,2300,1870,1480,1335,1300,1300,1300,1300,1300},
+	.adc = {3500,3470,3255,3050,2700,2300,1870,1480,1335,1300,1300},
 };
 
 //CalibrationTable default_tx_calibration_table = {
@@ -98,6 +98,7 @@ void write_calibration_points_to_eeprom(uint8_t chain)
 {
 	rxPoints *calPoints;
 	struct EEPROMs_IC *eeprom;
+	struct EEPROMs_IC *eepromBKP;
 	
 	if(chain == 1)
 	{
@@ -109,6 +110,8 @@ void write_calibration_points_to_eeprom(uint8_t chain)
 	}
 	
 	eeprom = &EEPROMs_GPIOs.RXB_ROM;
+	eepromBKP = &EEPROMs_GPIOs.MCU_2_ROM;
+
 	EnableSPI_FOR(SPI_route.RXB);
 	
 	uint32_t base_address = get_calibration_address(chain,0); // This already returns a byte address
@@ -119,34 +122,29 @@ void write_calibration_points_to_eeprom(uint8_t chain)
 	}
 
 	volatile rxCalBlock* blocks[2] = { &calPoints->main, &calPoints->aux };
+	
 
 	// Write DAC values
 	for (int p = 0; p < 2; p++) {
 		uint16_t dac = blocks[p]->dac;
-		writeEEPROM(eeprom, (uint8_t)(dac >> 8), base_address++);
+		writeEEPROM(eeprom, (uint8_t)(dac >> 8), base_address);
+		writeEEPROM(eepromBKP, (uint8_t)(dac >> 8), base_address++);
 		delay_ms(EEPROM_DELAY);
-		writeEEPROM(eeprom, (uint8_t)(dac & 0xFF), base_address++);
+		writeEEPROM(eeprom, (uint8_t)(dac & 0xFF), base_address);
+		writeEEPROM(eepromBKP, (uint8_t)(dac & 0xFF), base_address++);
 		delay_ms(EEPROM_DELAY);
 	}
 
 	// Write offset values
 	for (int p = 0; p < 2; p++) {
 		int16_t offset = blocks[p]->offset;
-		writeEEPROM(eeprom, (uint8_t)(offset >> 8), base_address++);
+		writeEEPROM(eeprom, (uint8_t)(offset >> 8), base_address);
+		writeEEPROM(eepromBKP, (uint8_t)(offset >> 8), base_address++);
 		delay_ms(EEPROM_DELAY);
-		writeEEPROM(eeprom, (uint8_t)(offset & 0xFF), base_address++);
+		writeEEPROM(eeprom, (uint8_t)(offset & 0xFF), base_address);
+		writeEEPROM(eepromBKP, (uint8_t)(offset & 0xFF), base_address++);
 		delay_ms(EEPROM_DELAY);
 	}
-	
-	//// Write time const values
-	//for (int p = 0; p < 2; p++) {
-	//uint16_t t_constant = blocks[p]->t_constant;
-	//writeEEPROM(eeprom, (uint8_t)(t_constant >> 8), base_address++);
-	//delay_ms(EEPROM_DELAY);
-	//writeEEPROM(eeprom, (uint8_t)(t_constant & 0xFF), base_address++);
-	//delay_ms(EEPROM_DELAY);
-	//}
-	
 	EnableSPI_FOR(SPI_route.MCU_ONLY);
 }
 
@@ -155,18 +153,31 @@ void load_Txcalibration_table(uint8_t chain)
 {
 	if (chain != 1 && chain != 2)
 	return; // Invalid chain
-	
-	CalibrationTable *table = (chain == 1) ? &txa_calibration_table : &txb_calibration_table;
+	struct Tx_status *SelectedChain;
+	CalibrationTable *table;
+	//CalibrationTable *table = (chain == 1) ? &txa_calibration_table : &txb_calibration_table;
 
-	uint32_t address = get_calibration_address(chain,1);
+	if(chain == 1)
+	{
+		SelectedChain = &tx.TxA;
+		table = &txa_calibration_table;
+	}
+	else
+	{
+		SelectedChain = &tx.TxB;
+		table = &txb_calibration_table;
+	}
+
+	uint32_t address = get_calibration_address(chain,1); //IN case of invalid address return do this
 	if (address == 0xFFFFFFFF) {
 		// Invalid address, load default calibration
 		memcpy(table, &default_tx_calibration_table, sizeof(CalibrationTable));
+		SelectedChain->uncalibratedFreq = 1;
 		set_tx_out_power(chain);
 		return;
 	}
-
-	for (uint8_t i = 0; i < NUM_POINTS; i++) {
+	
+	for (uint8_t i = 0; i < NUM_POINTS; i++) { //Load the cbm saved values
 		uint8_t high = readEEPROM(&EEPROMs_GPIOs.MCU_1_ROM, address++);
 		delay_ms(EEPROM_DELAY);
 		uint8_t low  = readEEPROM(&EEPROMs_GPIOs.MCU_1_ROM, address++);
@@ -174,14 +185,16 @@ void load_Txcalibration_table(uint8_t chain)
 		table->cbm[i] = (int16_t)((high << 8) | low);
 	}
 	
-	if (table->cbm[0] == 0xFFFF && table->cbm[NUM_POINTS - 1] == 0xFFFF) {
+	if (table->cbm[0] == 0xFFFF && table->cbm[NUM_POINTS - 1] == 0xFFFF) { //if loaded cbm values are FFFF use default calibration and return
 		// Uninitialized table, load default values
 		memcpy(table, &default_tx_calibration_table, sizeof(CalibrationTable));
+		SelectedChain->uncalibratedFreq = 1;
 		set_tx_out_power(chain);
 		return;
 	}
 
-	for (uint8_t i = 0; i < NUM_POINTS; i++) {
+	for (uint8_t i = 0; i < NUM_POINTS; i++) {  // Load ADC values of calibrated value
+		SelectedChain->uncalibratedFreq = 0;
 		uint8_t high = readEEPROM(&EEPROMs_GPIOs.MCU_1_ROM, address++);
 		delay_ms(EEPROM_DELAY);
 		uint8_t low  = readEEPROM(&EEPROMs_GPIOs.MCU_1_ROM, address++);
@@ -189,6 +202,7 @@ void load_Txcalibration_table(uint8_t chain)
 		table->adc[i] = (uint16_t)((high << 8) | low);
 	}
 	
+	set_min_allowed_adc(chain);	
 	set_tx_out_power(chain);
 }
 
@@ -220,15 +234,15 @@ void write_calibration_table_to_eeprom(uint8_t chain)
 
 void calculate_rx_in_power(uint8_t chain)
 {
-	struct Rx_PLLs *SelectedChain = NULL;
+	struct Rx_PLLs *selected_chain = NULL;
 	rxPoints *calibration = NULL;
 
 	if (chain == 1) {
-		SelectedChain = &Rx_Chains.RxA;
+		selected_chain = &Rx_Chains.RxA;
 		calibration   = &rxa_calibration;
 	}
 	else if (chain == 2) {
-		SelectedChain = &Rx_Chains.RxB;
+		selected_chain = &Rx_Chains.RxB;
 		calibration   = &rxb_calibration;
 	}
 	else {
@@ -236,12 +250,41 @@ void calculate_rx_in_power(uint8_t chain)
 	}
 
 	// Set targetADC based on input source
-	if (SelectedChain->Input == 1) {
-		SelectedChain->targetADC = calibration->aux.dac;
+	if (selected_chain->Input == 1) {
+		selected_chain->targetADC = calibration->aux.dac;
 	}
-	else if (SelectedChain->Input == 2) {
-		SelectedChain->targetADC = calibration->main.dac;
+	else if (selected_chain->Input == 2) {
+		selected_chain->targetADC = calibration->main.dac;
 	}
+}
+
+void set_min_allowed_adc(uint8_t chain)
+{
+	CalibrationTable *table;
+	struct Tx_status *SelectedChain;
+	
+	if(chain == 1)
+	{
+		SelectedChain = &tx.TxA;
+		table = &txa_calibration_table;
+	}
+	else
+	{
+		SelectedChain = &tx.TxB;
+		table = &txb_calibration_table;
+	}
+	
+	/* Find lowest  allowed ADC reading before marking the chain as faulty*/
+	uint16_t lowestADC = UINT16_MAX;
+	for (size_t i = 0; i < NUM_POINTS; i++)
+	{
+		if ( table->adc[i] < lowestADC)
+		{
+			lowestADC = table->adc[i];
+		}
+	}
+	SelectedChain->minAllowedADC = ((int32_t)lowestADC * (100 + PERCENTAGE_ADC_ALLOWED)) / 100;
+	/* Find lowest allowed ADC over */
 }
 
 void set_tx_out_power(uint8_t chain) {
@@ -322,13 +365,14 @@ void correctionloopRx(uint8_t Chain)
 		} else {
 		return; // Invalid chain
 	}
+
 	
 	if (!SelectedChain->agcEnable) return;
 	
 	// Threshold = the time constant (in ms) times 2 (50% instead of 63%)
-	//             divided by 10 ms for Rx AGC timer
-	adc_error_threshold = (int32_t)(SelectedChain->timeConst * 2) / 10;
-	if (adc_error_threshold < 50) adc_error_threshold = 50;
+	//             divided by Rx AGC timer
+	adc_error_threshold = (int32_t)(SelectedChain->timeConst * 2) / AGC_PERIOD_MS;
+	if (adc_error_threshold < 100) adc_error_threshold = 100;
 	// Positive error means more power needed hence increase
 	error = (int32_t)SelectedChain->targetADC - (int32_t)SelectedChain->currentADC;
 	// To calculate step size : 3 times the error (for 3 DACs) divided by the threshold
@@ -339,9 +383,9 @@ void correctionloopRx(uint8_t Chain)
 	if (error < 0 ) {
 		//UART_send_string("Correction dec\n");
 		for (int i = 0; i < 3; i++) {
-			if(SelectedChain->currentDACValue[i] <= DAC_MIN) continue;
+			if(SelectedChain->currentDACValue[i] <= DAC_MIN_RX) continue;
 			nextVal = (int32_t)SelectedChain->currentDACValue[i] + step;
-			SelectedChain->currentDACValue[i] = (nextVal < DAC_MIN) ? DAC_MIN : (uint16_t)nextVal;
+			SelectedChain->currentDACValue[i] = (nextVal < DAC_MIN_RX) ? DAC_MIN_RX : (uint16_t)nextVal;
 			active_DAC = i;
 			break;
 		}
@@ -349,9 +393,9 @@ void correctionloopRx(uint8_t Chain)
 		//UART_send_string("Correction inc\n");
 		//ADC too low so increase DACs from lowest priority (DAC1 to DAC3)
 		for (int i = 2; i >= 0; i--) {
-			if(SelectedChain->currentDACValue[i] >= DAC_MAX) continue;
+			if(SelectedChain->currentDACValue[i] >= DAC_MAX_RX) continue;
 			nextVal = SelectedChain->currentDACValue[i] + step;
-			SelectedChain->currentDACValue[i] = (nextVal > DAC_MAX) ? DAC_MAX : nextVal;
+			SelectedChain->currentDACValue[i] = (nextVal > DAC_MAX_RX) ? DAC_MAX_RX : nextVal;
 			active_DAC = i;
 			break;
 		}
@@ -374,9 +418,14 @@ void correctionloopRx(uint8_t Chain)
 	SelectedChain->currentDACValue[active_DAC]);
 }
 
-//
-// Correction loop to be called every 5ms from timer interrupt
-//
+
+
+
+/**
+* @brief Correction loop to be called every timer interrupt
+*
+* @param Chain : 1 for TxA, 2 for TxB
+*/
 void correctionloopTx(uint8_t Chain)
 {
 	uint8_t active_DAC = 0xFF;
@@ -394,22 +443,51 @@ void correctionloopTx(uint8_t Chain)
 		return; // Invalid chain
 	}
 	
-	if (!SelectedChain->agcEnable) return;
+	if (!SelectedChain->agcEnable || SelectedChain->FaultyChain == 1) return;
 	
+	if(SelectedChain->currentADC < SelectedChain->minAllowedADC && SelectedChain->isItOn == 1 && SelectedChain->uncalibratedFreq == 0)//Only trigger if current ADC too low, Chain is ON and A properly calibrated frequency
+	{
+		if(SelectedChain->failedADCattempts < AGC_MAX_FAILED_ATTEMPTS) SelectedChain->failedADCattempts++;
+		
+		else
+		{
+			SelectedChain->FaultyChain = 1;
+			SelectedChain->agcEnable = 0;
+			SelectedChain->currentDACValue[0] = SelectedChain->currentDACValue[1] = SelectedChain->currentDACValue[2] = 0;
+			
+			if(Chain==1)
+			{
+				setupDACTxA(); // Apply DAC values
+				UART_send_string("Chain 1: ");
+			}
+			else if (Chain==2)
+			{
+				setupDACTxB();
+				UART_send_string("Chain 2: ");
+			}
+			
+			UART_send_string("Unexpected Log detector value detected for the last 333ms.");
+			UART_send_string("AGC and Power will now be disabled to prevent damages\n\r");
+			return;
+		}
+	}
+	else if (SelectedChain->currentADC >= SelectedChain->minAllowedADC) SelectedChain->failedADCattempts = 0; //If ADC number legit then reset counter
+	
+	uint16_t minTau = 6*AGC_PERIOD_MS;
 	tau = (int32_t)(SelectedChain->timeConst);
-	if (tau < 30) tau = 30; // 30 should not cause oscillations (it sets the step = error)
+	if (tau < minTau) tau = minTau; // minTau should not cause oscillations (it sets the step = error)
 	// Positive error means more power needed hence increase
 	error = (int32_t)SelectedChain->targetADC - (int32_t)SelectedChain->currentADC;
-	// Step size = 10 ms LoopBW x 3 times the error (for 3 DACs) divided by the time constant
-	step = error * 30 / tau;
+	// Step size = agc_period LoopBW x 3 times the error (for 3 DACs) divided by the time constant
+	step = error * (3*AGC_PERIOD_MS) / tau;
 	if (step == 0 && error > 0) step = 1;
 	else if (step == 0 && error < 0) step = -1;
 	
 	if (error < 0 ) {
 		for (int i = 2; i >= 0; i--) {
-			if(SelectedChain->currentDACValue[i] <= DAC_MIN) continue;
+			if(SelectedChain->currentDACValue[i] <= DAC_MIN_TX) continue;
 			nextVal = SelectedChain->currentDACValue[i] + step;
-			SelectedChain->currentDACValue[i] = (nextVal < DAC_MIN) ? DAC_MIN : nextVal;
+			SelectedChain->currentDACValue[i] = (nextVal < DAC_MIN_TX) ? DAC_MIN_TX : nextVal;
 			active_DAC = i;
 			break;
 		}
@@ -417,9 +495,9 @@ void correctionloopTx(uint8_t Chain)
 	else if (error > 0) {
 		for (int i = 0; i < 3; i++) {
 
-			if(SelectedChain->currentDACValue[i] >= DAC_MAX) continue;
+			if(SelectedChain->currentDACValue[i] >= DAC_MAX_TX) continue;
 			nextVal = SelectedChain->currentDACValue[i] + step;
-			SelectedChain->currentDACValue[i] = (nextVal > DAC_MAX) ? DAC_MAX : nextVal;
+			SelectedChain->currentDACValue[i] = (nextVal > DAC_MAX_TX) ? DAC_MAX_TX : nextVal;
 			active_DAC = i;
 			break;
 		}
@@ -432,6 +510,7 @@ void correctionloopTx(uint8_t Chain)
 	SelectedChain->dacChan[active_DAC],
 	SelectedChain->currentDACValue[active_DAC]);
 }
+
 
 void reset_tx_calibration(uint8_t chain)
 {

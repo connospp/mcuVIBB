@@ -149,6 +149,30 @@ void UART_execute_cmd(void) {
 		eeprom_update_block((const void*)serialN, sn2_p, 8);  // save only 8 bytes
 		UART_send_string("SN2 written to EEPROM\r\n");
 	}
+	else if (strncmp((const char *)uart_buffer, "IP",2) == 0)
+	{
+		volatile char* input = uart_buffer + 2;  // skip "IP"
+		uint8_t def_ip_param[12] = {0}; // default IP, subnet mask and gateway
+		
+		for (size_t i = 0; i < 12; i++) {
+			char segment[4] = {0}; // 3 digits + null terminator
+			strncpy(segment,(const char *) input + i*3, 3);
+			def_ip_param[i] = (uint8_t)atoi(segment);
+		}
+		
+		eeprom_update_block((const void*)def_ip_param, (void*)ip_p, 12);
+		eth_status.F_fin = 1; // re-initialize IP/TCP protocol w5500
+	}
+	else if (strncmp((const char *)uart_buffer, "PORT",4) == 0)
+	{
+		uint8_t port_bytes[2];
+		uint16_t number_buffer = (uint16_t)extractFloat(4,uart_buffer);
+		port_bytes[1] = number_buffer & 0xFF;       // LSB
+		port_bytes[0] = (number_buffer >> 8) & 0xFF; // MSB
+		
+		eeprom_update_block((const void*)port_bytes, (void*)tcp_p, 2);
+		eth_status.F_fin = 1;
+	}
 	else if (strncmp((const char *)uart_buffer, "W_MAC", 5) == 0) {
 		write_mac_address((const char *)uart_buffer + 5);
 	}
@@ -166,10 +190,6 @@ void UART_execute_cmd(void) {
 		UART_send_string("MAC: ");
 		UART_send_string(macString);
 		UART_send_string("\r\n");
-	}
-	else if (strcmp((const char *)uart_buffer, "RESET") == 0)
-	{
-		CID_eth_factrst();
 	}
 	else if (strncmp((const char *)uart_buffer, "DTXA",4) == 0)
 	{
@@ -195,43 +215,6 @@ void UART_execute_cmd(void) {
 		Rx_Chains.RxB.currentDACValue[0] = Rx_Chains.RxB.currentDACValue[1] = Rx_Chains.RxB.currentDACValue[2] = number_buffer;
 		setupDACRxB();
 	}
-	
-	else if (strncmp((const char *)uart_buffer, "PTXA", 4) == 0)
-	{
-		float value = extractFloat(4, uart_buffer);    // extract float from UART buffer
-		value *= 10.0f;                                // multiply by 10
-		
-		// Clamp to desired range
-		if (value > 10.0f)      value = 10.0f;
-		if (value < -70.0f)     value = -70.0f;
-
-		// remove any decimal part
-		tx.TxA.carrierPower = (int16_t)value;          // implicit truncation (no rounding)
-
-		set_tx_out_power(1);
-
-		sprintf(buffer, "Power TXA: %d cbm\r\n ", tx.TxA.carrierPower);
-		UART_send_string(buffer);
-	}
-	
-	else if (strncmp((const char *)uart_buffer, "PTXB", 4) == 0)
-	{
-		float value = extractFloat(4, uart_buffer);    // extract float from UART buffer
-		value *= 10.0f;                                // multiply by 10
-
-		// Clamp to desired range
-		if (value > 10.0f)      value = 10.0f;
-		if (value < -70.0f)     value = -70.0f;
-
-		// remove any decimal part
-		tx.TxB.carrierPower = (int16_t)value;          // implicit truncation (no rounding)
-
-		set_tx_out_power(2);
-
-		sprintf(buffer, "Power TXB: %d cbm \r\n ", tx.TxB.carrierPower);
-		UART_send_string(buffer);
-	}
-	
 	else if (strcmp((const char *)uart_buffer, "ADC") == 0)
 	{
 		sprintf(buffer,"TxA Freq: %lu MHz\r\n", (uint32_t)(tx.TxA.FreqMHz / SCALE_FACTOR));
@@ -293,19 +276,7 @@ void UART_execute_cmd(void) {
 		sprintf(buffer, "RxB Main offset = %u\r\n", rxb_calibration.main.offset);  // %u for unsigned int
 		UART_send_string(buffer);
 		
-		UART_send_string("======================================\r\n");
-
-		
-	}
-	else if (strcmp((const char *)uart_buffer, "TEMP") == 0)
-	{
-		float temp = TC72_read_float();
-		sprintf(buffer, "MCU = %.2f�C\r\n", temp);
-		UART_send_string(buffer);
-	}
-	else if (strncmp((const char *)uart_buffer, "SP",3) == 0)
-	{
-		UART_send_string("Command not in use");
+		UART_send_string("======================================\r\n");		
 	}
 	else if (strcmp((const char *)uart_buffer, "TXA_LOOP") == 0)
 	{
@@ -313,7 +284,7 @@ void UART_execute_cmd(void) {
 
 		if ((*REST.TXA_LOOP_SW.PORT & (1 << REST.TXA_LOOP_SW.PIN)) == 0) {
 			// Pin is LOW -> set HIGH and apply agcDisable + DAC = 1800
-			//tx.TxA.agcEnable = 0;
+			tx.TxA.agcEnable = 0;
 			//tx.TxA.currentDACValue[0] = tx.TxA.currentDACValue[1] = tx.TxA.currentDACValue[2] = 1800;
 			//setupDACTxA();
 			
@@ -321,6 +292,9 @@ void UART_execute_cmd(void) {
 		}
 		else {
 			// Pin is HIGH -> set LOW (no extra actions here)
+			tx.TxA.currentDACValue[0] = tx.TxA.currentDACValue[1] = tx.TxA.currentDACValue[2] = DAC_RESET_VALUE;
+			setupDACTxA();
+			tx.TxA.agcEnable = 1;
 			*REST.TXA_LOOP_SW.PORT &= ~(1 << REST.TXA_LOOP_SW.PIN);
 		}
 	}
@@ -331,16 +305,76 @@ void UART_execute_cmd(void) {
 
 		if ((*REST.TXB_LOOP_SW.PORT & (1 << REST.TXB_LOOP_SW.PIN)) == 0) {
 			// Pin is LOW -> set HIGH and apply agcDisable + DAC = 1800
-			//tx.TxB.agcEnable = 0;
+			tx.TxB.agcEnable = 0;
 			//tx.TxB.currentDACValue[0] = tx.TxB.currentDACValue[1] = tx.TxB.currentDACValue[2] = 1800;
 			//setupDACTxB();
 			
 			*REST.TXB_LOOP_SW.PORT |= (1 << REST.TXB_LOOP_SW.PIN);
 		}
 		else {
+			tx.TxB.currentDACValue[0] = tx.TxB.currentDACValue[1] = tx.TxB.currentDACValue[2] = DAC_RESET_VALUE;
+			setupDACTxB();
 			// Pin is HIGH -> set LOW (no extra actions here)
-			*REST.TXA_LOOP_SW.PORT &= ~(1 << REST.TXA_LOOP_SW.PIN);
+			tx.TxB.agcEnable = 1;
+			*REST.TXB_LOOP_SW.PORT &= ~(1 << REST.TXB_LOOP_SW.PIN);
 		}
+	}	
+	else if (strcmp((const char *)uart_buffer, "HEALTH") == 0)
+	{
+		const char* msgs[] = {
+			"ADC Tx", "ADC Rx", "Ethernet", NULL, "Temp",
+			"RXA PLLA", "RXA PLLB", "RXB PLLA", "RXB PLLB",
+			"TXA LOG DET PLL", "TXB LOG DET PLL", "PLL MASTER 645",
+			"PLL Master 100M (10M)", "PLL Master 3.5G OK", "PLL Master VHF",
+			"PLL Master 8-12G", "PLL Slave VHF", "PLL Slave 3.5G", "PLL Slave 8-12G"
+		};
+
+		perif_health = CID_health_check();
+		char buffer[64];
+		for (uint8_t bit = 0; bit < sizeof(msgs)/sizeof(msgs[0]); bit++) {
+			if (msgs[bit] == NULL) continue; // skip unused bit 3
+			snprintf(buffer, sizeof(buffer), "%s = %lu\r\n", msgs[bit], (perif_health >> bit) & 1);
+			UART_send_string(buffer);
+		}
+		
+		// Handle bits 19�21 for PSU status
+		uint8_t bit19 = (perif_health >> 19) & 1;
+		uint8_t bit20 = (perif_health >> 20) & 1;
+		uint8_t bit21 = (perif_health >> 21) & 1;
+
+		if (!bit19 && bit20 && bit21) {
+			UART_send_string("PSU OK\r\n");
+		}
+		else if (bit21 && bit19 && !bit20) {
+			UART_send_string("One of two AC cables not connected ");
+			UART_send_string("or One of two PSUs has fatal error\r\n");
+		}
+		else if (!bit19 && !bit20 && bit21) {
+			UART_send_string("One of the two PSU modules not properly inserted\r\n");
+		}
+		else if (bit19 && !bit20 && !bit21) {
+			UART_send_string("Fatal error\r\n");
+			} else {
+			UART_send_string("PSU status unknown\r\n");
+		}
+	}
+	else if (strcmp((const char *)uart_buffer, "TEMP") == 0)
+	{
+		volatile float temp = TC72_read_float();
+		sprintf(buffer, "MCU = %.2fC\r\n", temp);
+		UART_send_string(buffer);
+	}	
+	else if (strcmp((const char *)uart_buffer, "ETH") == 0)
+	{
+		read_eth();
+	}
+	else if (strcmp((const char *)uart_buffer, "RESET") == 0)
+	{
+		CID_eth_factrst();
+	}	
+	else if (strcmp((const char *)uart_buffer, REBOOT_CMD) == 0)
+	{
+		RebootHandling();
 	}
 	else if (strcmp((const char *)uart_buffer, "RXA_LOOP") == 0)
 	{
@@ -387,81 +421,20 @@ void UART_execute_cmd(void) {
 
 		sprintf(buffer, "RXB = %s\r\n", input_names[Rx_Chains.RxB.Input]);
 		UART_send_string(buffer);
-		
 	}
-	else if (strcmp((const char *)uart_buffer, "ETH") == 0)
-	{
-		read_eth();
-	}
-	else if (strncmp((const char *)uart_buffer, "IP",2) == 0)
-	{
-		volatile char* input = uart_buffer + 2;  // skip "IP"
-		uint8_t def_ip_param[12] = {0}; // default IP, subnet mask and gateway
-		
-		for (size_t i = 0; i < 12; i++) {
-			char segment[4] = {0}; // 3 digits + null terminator
-			strncpy(segment,(const char *) input + i*3, 3);
-			def_ip_param[i] = (uint8_t)atoi(segment);
-		}
-		
-		eeprom_update_block((const void*)def_ip_param, (void*)ip_p, 12);
-		eth_status.F_fin = 1; // re-initialize IP/TCP protocol w5500
-	}
-	else if (strncmp((const char *)uart_buffer, "PORT",4) == 0)
-	{
-		uint8_t port_bytes[2];
-		uint16_t number_buffer = (uint16_t)extractFloat(4,uart_buffer);
-		port_bytes[1] = number_buffer & 0xFF;       // LSB
-		port_bytes[0] = (number_buffer >> 8) & 0xFF; // MSB
-		
-		eeprom_update_block((const void*)port_bytes, (void*)tcp_p, 2);
-		eth_status.F_fin = 1;
-	}
-	else if (strcmp((const char *)uart_buffer, "HEALTH") == 0)
-	{
-		const char* msgs[] = {
-			"ADC Tx", "ADC Rx", "Ethernet", NULL, "Temp",
-			"RXA PLLA", "RXA PLLB", "RXB PLLA", "RXB PLLB",
-			"TXA LOG DET PLL", "TXB LOG DET PLL", "PLL MASTER 645",
-			"PLL Master 100M (10M)", "PLL Master 3.5G OK", "PLL Master VHF",
-			"PLL Master 8-12G", "PLL Slave VHF", "PLL Slave 3.5G", "PLL Slave 8-12G"
-		};
-
-		perif_health = CID_health_check();
-		char buffer[64];
-		for (uint8_t bit = 0; bit < sizeof(msgs)/sizeof(msgs[0]); bit++) {
-			if (msgs[bit] == NULL) continue; // skip unused bit 3
-			snprintf(buffer, sizeof(buffer), "%s = %lu\r\n", msgs[bit], (perif_health >> bit) & 1);
-			UART_send_string(buffer);
-		}
-		
-		// Handle bits 19�21 for PSU status
-		uint8_t bit19 = (perif_health >> 19) & 1;
-		uint8_t bit20 = (perif_health >> 20) & 1;
-		uint8_t bit21 = (perif_health >> 21) & 1;
-
-		if (!bit19 && bit20 && bit21) {
-			UART_send_string("PSU OK\r\n");
-		}
-		else if (bit21 && bit19 && !bit20) {
-			UART_send_string("One of two AC cables not connected ");
-			UART_send_string("or One of two PSUs has fatal error\r\n");
-		}
-		else if (!bit19 && !bit20 && bit21) {
-			UART_send_string("One of the two PSU modules not properly inserted\r\n");
-		}
-		else if (bit19 && !bit20 && !bit21) {
-			UART_send_string("Fatal error\r\n");
-			} else {
-			UART_send_string("PSU status unknown\r\n");
-		}
-	}
+	
 	else if (strcmp((const char *)uart_buffer, "AGC") == 0)
 	{
-		Rx_Chains.RxA.agcEnable ^= 1;
-		Rx_Chains.RxB.agcEnable ^= 1;
-		tx.TxA.agcEnable        ^= 1;
-		tx.TxB.agcEnable        ^= 1;
+		static uint8_t agcState = 1;
+
+		// flip the global state
+		agcState ^= 1;
+		
+		// apply it
+		Rx_Chains.RxA.agcEnable = agcState;
+		Rx_Chains.RxB.agcEnable = agcState;
+		tx.TxA.agcEnable        = agcState;
+		tx.TxB.agcEnable        = agcState;
 		
 		sprintf(buffer, "AGC - RxA:%s RxB:%s TxA:%s TxB:%s\r\n",
 		Rx_Chains.RxA.agcEnable ? "ON" : "OFF",
@@ -471,24 +444,16 @@ void UART_execute_cmd(void) {
 		
 		UART_send_string(buffer);
 	}
-	else if (strcmp((const char *)uart_buffer, REBOOT_CMD) == 0)
-	{
-		w5500_disconnect_then_abort(SOCKET_0,500); //Wait for 500ms for mercifull disconection else close TCP connection bruttaly
-		wdt_enable(WDTO_15MS); // Set watchdog to timeout in 15ms
-		while (1);           // Wait for watchdog to reset the MCU
-	}
+	
 	else if (strcmp((const char *)uart_buffer, "OFF") == 0)
 	{
 		powerHandling();
 	}
-	else if (strncmp((const char *)uart_buffer, "TEST_MODE",3) == 0)
-	{
-		UART_send_string("Command not in use");
-	}
+	
 	else if (strncmp((const char *)uart_buffer, "QPC", 3) == 0 || strncmp((const char *)uart_buffer, "ATT", 3) == 0)
 	{
 		float number_buffer = extractFloat(3, uart_buffer);
-		float TxAFreq = Rf_PLL._8_12Ghz_PLL2_ADF_TxA.FreqMHz;
+		volatile float TxAFreq = Rf_PLL._8_12Ghz_PLL2_ADF_TxA.FreqMHz;
 		uint16_t Ncounter = (TxAFreq < 310) ? 71 : 73 + 2 * ((int)(TxAFreq - 310) / 250);
 		
 		snprintf(buffer, sizeof(buffer), "TxA Freq: %.3f MHz | N: %u\r\n", TxAFreq, Ncounter);
@@ -498,6 +463,12 @@ void UART_execute_cmd(void) {
 
 		if (number_buffer < 0.0f) number_buffer = 0.0f;
 		if (number_buffer > 31.75f) number_buffer = 31.75f;
+		
+		// NEW: enforce minimum of 6 and notify user
+		if (number_buffer < 6.0f) {
+			number_buffer = 6.0f;
+			UART_send_string("Value too low, set to minimum 6 dB\r\n");
+		}
 
 		uint8_t atten_value = (uint8_t)(number_buffer * 4) & 0x7F;
 		uint16_t reg_value = (uint16_t)atten_value;
@@ -507,7 +478,7 @@ void UART_execute_cmd(void) {
 		EnableSPI_FOR(SPI_route.MCU_ONLY);
 
 		// Update ATT value in the calibration table
-		for (int i = 0; i < CAL_TABLE_SIZE; i++) {
+		for (int i = 0; i < FREQ_TABLE_SIZE; i++) {
 			if (freqTable.N[i] == Ncounter) {
 				freqTable.ATT[i] = number_buffer;
 				break;
@@ -520,7 +491,7 @@ void UART_execute_cmd(void) {
 
 		uint16_t number_buffer = extractFloat(3, uart_buffer);
 		
-		float TxAFreq = Rf_PLL._8_12Ghz_PLL2_ADF_TxA.FreqMHz;
+		volatile float TxAFreq = Rf_PLL._8_12Ghz_PLL2_ADF_TxA.FreqMHz;
 		uint16_t Ncounter = (TxAFreq < 310) ? 71 : 73 + 2 * ((int)(TxAFreq - 310) / 250);
 
 		snprintf(buffer, sizeof(buffer), "TxA Freq: %.3f MHz | N: %u\r\n", TxAFreq, Ncounter);
@@ -544,11 +515,44 @@ void UART_execute_cmd(void) {
 		EnableSPI_FOR(SPI_route.MCU_ONLY);
 
 		// Update RHE value in the calibration table
-		for (int i = 0; i < CAL_TABLE_SIZE; i++) {
+		for (int i = 0; i < FREQ_TABLE_SIZE; i++) {
 			if (freqTable.N[i] == Ncounter) {
 				freqTable.RHE[i] = number_buffer;
 				break;
 			}
+		}
+	}	
+	else if (strncmp((const char *)uart_buffer, "SAVE_N",3) == 0)
+	{
+		write_freqTable_to_eeprom();
+	}
+	else if (strncmp((const char *)uart_buffer, "LOAD_N",3) == 0)
+	{
+		load_freqTable_from_eeprom();
+		
+		float TxAFreq = Rf_PLL._8_12Ghz_PLL2_ADF_TxA.FreqMHz;
+		uint16_t Ncounter = (TxAFreq < 310) ? 71 : 73 + 2 * ((int)(TxAFreq - 310) / 250);
+
+		// Print header
+		UART_send_string("N\tATT\tRHE\r\n");
+
+		for (int i = 0; i < 17; i++) {
+
+			snprintf(buffer, sizeof(buffer), "%d\t%d\t%d",
+			freqTable.N[i],
+			freqTable.ATT[i],
+			freqTable.RHE[i]);
+
+			// Append a marker only if it matches
+			if (freqTable.N[i] == Ncounter) {
+				strcat(buffer, "<");
+			}
+
+			// Finish with newline
+			strcat(buffer, "\r\n");
+
+			UART_send_string(buffer);
+			delay_ms(1);
 		}
 	}
 	else if (strncmp((const char *)uart_buffer, "TXA",3) == 0)
@@ -571,13 +575,399 @@ void UART_execute_cmd(void) {
 		long long number_buffer = extractFloatToLong(3,uart_buffer);
 		change_Rx_Frequency(number_buffer,2);
 	}
-	else if (strncmp((const char *)uart_buffer, "SAVE_N",3) == 0)
+	else if (strncmp((const char *)uart_buffer, "PTXA", 4) == 0)
 	{
-		write_freqTable_to_eeprom();
+		float value = extractFloat(4, uart_buffer);    // extract float from UART buffer
+		value *= 10.0f;                                // multiply by 10
+		
+		// Clamp to desired range
+		if (value > 100.0f)      value = 100.0f;
+		if (value < -700.0f)     value = -700.0f;
+
+		// remove any decimal part
+		tx.TxA.carrierPower = (int16_t)value;          // implicit truncation (no rounding)
+
+		set_tx_out_power(1);
+
+		sprintf(buffer, "Power TXA: %d cbm\r\n ", tx.TxA.carrierPower);
+		UART_send_string(buffer);
 	}
+	
+	else if (strncmp((const char *)uart_buffer, "PTXB", 4) == 0)
+	{
+		float value = extractFloat(4, uart_buffer);    // extract float from UART buffer
+		value *= 10.0f;                                // multiply by 10
+
+		// Clamp to desired range
+		if (value > 100.0f)      value = 100.0f;
+		if (value < -700.0f)     value = -700.0f;
+
+		// remove any decimal part
+		tx.TxB.carrierPower = (int16_t)value;          // implicit truncation (no rounding)
+
+		set_tx_out_power(2);
+
+		sprintf(buffer, "Power TXB: %d cbm \r\n ", tx.TxB.carrierPower);
+		UART_send_string(buffer);
+	}	
+	
+	else if (strncmp((const char *)uart_buffer, "SP",3) == 0)
+	{
+		UART_send_string("Command not in use");
+	}
+	
+	else if (strncmp((const char *)uart_buffer, "TEST_MODE",3) == 0) // Will toggle TX chains "isItOn" parameter
+	{
+		static int8_t state = 0;
+		state ^= 1;
+		
+		CID_set_carrier(0, state);
+		CID_set_carrier(1, state);
+	}
+	
 	else if (strcmp((const char *)uart_buffer, "PLL645") == 0)
 	{
 		Prepare645M();
+	}	
+	else if (strcmp((const char *)uart_buffer, "CALA") == 0)
+	{
+		volatile char line[16];
+		char echo_buf[16];
+		float value;
+
+		wdt_disable();
+		UCSR0B &= ~(1 << RXCIE0);   // hand UDR0 exclusively to receive_uart()
+
+		UART_send_string("Starting TX A calibration.\r\n");
+
+		for (uint8_t i = 0; i < CAL_TABLE_SIZE; i++)
+		{
+			UART_send_string("cbm: ");
+			read_uart_line(line, sizeof(line));
+			value = extractFloat(0, line);
+			dtostrf(value, 6, 2, echo_buf);
+			UART_send_string("Got: ");
+			UART_send_string(echo_buf);
+			UART_send_string("\r\n");
+			txa_calibration_table.cbm[i] = (int16_t)lroundf(value * 10.0f);
+
+			UART_send_string("adc: ");
+			read_uart_line(line, sizeof(line));
+			value = extractFloat(0, line);
+			dtostrf(value, 6, 2, echo_buf);
+			UART_send_string("Got: ");
+			UART_send_string(echo_buf);
+			UART_send_string("\r\n");
+			txa_calibration_table.adc[i] = (uint16_t)value;
+		}
+
+		UART_send_string("Calibration complete.\r\n");
+
+		UCSR0B |= (1 << RXCIE0);   // restore normal interrupt-driven RX
+		wdt_enable(WDTO_2S);
+	}
+	else if (strcmp((const char *)uart_buffer, "CALB") == 0)
+	{
+		volatile char line[16];
+		char echo_buf[16];
+		float value;
+
+		wdt_disable();
+		UCSR0B &= ~(1 << RXCIE0);   // hand UDR0 exclusively to receive_uart()
+
+		UART_send_string("Starting TX B calibration.\r\n");
+
+		for (uint8_t i = 0; i < CAL_TABLE_SIZE; i++)
+		{
+			UART_send_string("cbm: ");
+			read_uart_line(line, sizeof(line));
+			value = extractFloat(0, line);
+			dtostrf(value, 6, 2, echo_buf);
+			UART_send_string("Got: ");
+			UART_send_string(echo_buf);
+			UART_send_string("\r\n");
+			txb_calibration_table.cbm[i] = (int16_t)lroundf(value * 10.0f);
+
+			UART_send_string("adc: ");
+			read_uart_line(line, sizeof(line));
+			value = extractFloat(0, line);
+			dtostrf(value, 6, 2, echo_buf);
+			UART_send_string("Got: ");
+			UART_send_string(echo_buf);
+			UART_send_string("\r\n");
+			txb_calibration_table.adc[i] = (uint16_t)value;
+		}
+
+		UART_send_string("Calibration complete.\r\n");
+
+		UCSR0B |= (1 << RXCIE0);   // restore normal interrupt-driven RX
+		wdt_enable(WDTO_2S);
+	}
+	else if (strcmp((const char *)uart_buffer, "DUMP") == 0)
+	{
+		dump_calibration_table("TX A Calibration Table",1);
+		dump_calibration_table("TX B Calibration Table",2);
+	}
+	else if (strcmp((const char *)uart_buffer, "SCAL") == 0)
+	{
+		UART_send_string("Saving TX A Calibration Table \r\n");
+		write_calibration_table_to_eeprom(1);
+		UART_send_string("Saving TX B Calibration Table \r\n");
+		write_calibration_table_to_eeprom(2);
+	}
+	else if (strcmp((const char *)uart_buffer, "RESTORE_2283_BKP") == 0) {
+		// Backup structure to read from EEPROM
+		
+		long long gsat = 228300000;
+		change_Rx_Frequency(gsat, 1);
+		change_Rx_Frequency(gsat, 2);
+		
+		typedef struct {
+			rxPoints rxa_cal;
+			rxPoints rxb_cal;
+		} RxBackupData;
+		
+		RxBackupData readback_data;
+		
+		// Read from EEPROM at gstarRxBackup address
+		eeprom_read_block(&readback_data, gstarRxBackup, sizeof(RxBackupData));
+		
+			
+		// Prepare strings for UART output
+		char uart_msg[100];
+		
+		UART_send_string("\r\n=== RESTORING FROM EEPROM BACKUP ===\r\n");
+		
+		// Show what will be restored
+		UART_send_string("Reading backup values:\r\n");
+		
+		sprintf(uart_msg, "RxA AUX: offset=%d, dac=%u\r\n",
+		readback_data.rxa_cal.aux.offset, readback_data.rxa_cal.aux.dac);
+		UART_send_string(uart_msg);
+		
+		sprintf(uart_msg, "RxA MAIN: offset=%d, dac=%u\r\n",
+		readback_data.rxa_cal.main.offset, readback_data.rxa_cal.main.dac);
+		UART_send_string(uart_msg);
+		
+		sprintf(uart_msg, "RxB AUX: offset=%d, dac=%u\r\n",
+		readback_data.rxb_cal.aux.offset, readback_data.rxb_cal.aux.dac);
+		UART_send_string(uart_msg);
+		
+		sprintf(uart_msg, "RxB MAIN: offset=%d, dac=%u\r\n",
+		readback_data.rxb_cal.main.offset, readback_data.rxb_cal.main.dac);
+		UART_send_string(uart_msg);
+		
+		UART_send_string("\r\nRestoring calibration values...\r\n");
+		
+		// Restore the calibration values
+		rxa_calibration = readback_data.rxa_cal;
+		rxb_calibration = readback_data.rxb_cal;
+		
+		UART_send_string("Calibration values restored successfully!\r\n");
+		
+		// Verify the restoration
+		UART_send_string("\r\nVerifying restored values:\r\n");
+		
+		sprintf(uart_msg, "RxA AUX: offset=%d, dac=%u %s\r\n",
+		rxa_calibration.aux.offset, rxa_calibration.aux.dac,
+		(rxa_calibration.aux.offset == readback_data.rxa_cal.aux.offset &&
+		rxa_calibration.aux.dac == readback_data.rxa_cal.aux.dac) ? "[OK]" : "[FAIL]");
+		UART_send_string(uart_msg);
+		
+		sprintf(uart_msg, "RxA MAIN: offset=%d, dac=%u %s\r\n",
+		rxa_calibration.main.offset, rxa_calibration.main.dac,
+		(rxa_calibration.main.offset == readback_data.rxa_cal.main.offset &&
+		rxa_calibration.main.dac == readback_data.rxa_cal.main.dac) ? "[OK]" : "[FAIL]");
+		UART_send_string(uart_msg);
+		
+		sprintf(uart_msg, "RxB AUX: offset=%d, dac=%u %s\r\n",
+		rxb_calibration.aux.offset, rxb_calibration.aux.dac,
+		(rxb_calibration.aux.offset == readback_data.rxb_cal.aux.offset &&
+		rxb_calibration.aux.dac == readback_data.rxb_cal.aux.dac) ? "[OK]" : "[FAIL]");
+		UART_send_string(uart_msg);
+		
+		sprintf(uart_msg, "RxB MAIN: offset=%d, dac=%u %s\r\n",
+		rxb_calibration.main.offset, rxb_calibration.main.dac,
+		(rxb_calibration.main.offset == readback_data.rxb_cal.main.offset &&
+		rxb_calibration.main.dac == readback_data.rxb_cal.main.dac) ? "[OK]" : "[FAIL]");
+		UART_send_string(uart_msg);
+		
+		write_calibration_points_to_eeprom(1);
+		write_calibration_points_to_eeprom(2);
+		
+		UART_send_string("=== RESTORE COMPLETE ===\r\n");
+	}
+	else if (strcmp((const char *)uart_buffer, "BACKUP70") == 0)
+	{
+		long long seventy = 7000000;
+		long long backupLSlot = 613500000;
+		
+		change_Rx_Frequency(seventy,1);
+		change_Rx_Frequency(seventy,2);
+		
+		rxPoints rxaB_cal = rxa_calibration;
+		rxPoints rxbB_cal = rxb_calibration;
+		
+		change_Rx_Frequency(backupLSlot,1);
+		change_Rx_Frequency(backupLSlot,2);
+		
+		rxa_calibration = rxaB_cal;
+		rxb_calibration = rxbB_cal;
+		
+		write_calibration_points_to_eeprom(1);
+		write_calibration_points_to_eeprom(2);
+	}
+	else if (strcmp((const char *)uart_buffer, "REST70") == 0)
+	{
+		long long seventy = 7000000;
+		long long backupLSlot = 613500000;
+		
+		change_Rx_Frequency(backupLSlot,1);
+		change_Rx_Frequency(backupLSlot,2);
+		
+		rxPoints rxaB_cal = rxa_calibration;
+		rxPoints rxbB_cal = rxb_calibration;
+		
+		change_Rx_Frequency(seventy,1);
+		change_Rx_Frequency(seventy,2);
+		
+		rxa_calibration = rxaB_cal;
+		rxb_calibration = rxbB_cal;
+		
+		write_calibration_points_to_eeprom(1);
+		write_calibration_points_to_eeprom(2);
+	}
+	else if (strcmp((const char *)uart_buffer, "BACKUP2283") == 0) {
+		long long gsat = 228300000;
+		change_Rx_Frequency(gsat, 1);
+		change_Rx_Frequency(gsat, 2);
+		
+		// Backup structure to save in EEPROM (without targetADC)
+		typedef struct {
+			rxPoints rxa_cal;
+			rxPoints rxb_cal;
+		} RxBackupData;
+		
+		RxBackupData backup_data;
+		
+		// Populate the backup data structure
+		backup_data.rxa_cal = rxa_calibration;
+		backup_data.rxb_cal = rxb_calibration;
+		
+		// Save to EEPROM at gstarRxBackup address
+		eeprom_update_block(&backup_data, gstarRxBackup, sizeof(RxBackupData));
+		
+		// Read back from EEPROM for verification
+		RxBackupData readback_data;
+		eeprom_read_block(&readback_data, gstarRxBackup, sizeof(RxBackupData));
+		
+		// Prepare strings for UART output
+		char uart_msg[100];
+		
+		UART_send_string("\r\n=== EEPROM BACKUP VERIFICATION ===\r\n");
+		
+		// Verify and report RxA calibration - AUX
+		sprintf(uart_msg, "RxA AUX offset - Original: %d, EEPROM: %d %s\r\n",
+		backup_data.rxa_cal.aux.offset,
+		readback_data.rxa_cal.aux.offset,
+		(backup_data.rxa_cal.aux.offset == readback_data.rxa_cal.aux.offset) ? "[OK]" : "[FAIL]");
+		UART_send_string(uart_msg);
+		
+		sprintf(uart_msg, "RxA AUX dac - Original: %u, EEPROM: %u %s\r\n",
+		backup_data.rxa_cal.aux.dac,
+		readback_data.rxa_cal.aux.dac,
+		(backup_data.rxa_cal.aux.dac == readback_data.rxa_cal.aux.dac) ? "[OK]" : "[FAIL]");
+		UART_send_string(uart_msg);
+		
+		// Verify and report RxA calibration - MAIN
+		sprintf(uart_msg, "RxA MAIN offset - Original: %d, EEPROM: %d %s\r\n",
+		backup_data.rxa_cal.main.offset,
+		readback_data.rxa_cal.main.offset,
+		(backup_data.rxa_cal.main.offset == readback_data.rxa_cal.main.offset) ? "[OK]" : "[FAIL]");
+		UART_send_string(uart_msg);
+		
+		sprintf(uart_msg, "RxA MAIN dac - Original: %u, EEPROM: %u %s\r\n",
+		backup_data.rxa_cal.main.dac,
+		readback_data.rxa_cal.main.dac,
+		(backup_data.rxa_cal.main.dac == readback_data.rxa_cal.main.dac) ? "[OK]" : "[FAIL]");
+		UART_send_string(uart_msg);
+		
+		// Verify and report RxB calibration - AUX
+		sprintf(uart_msg, "RxB AUX offset - Original: %d, EEPROM: %d %s\r\n",
+		backup_data.rxb_cal.aux.offset,
+		readback_data.rxb_cal.aux.offset,
+		(backup_data.rxb_cal.aux.offset == readback_data.rxb_cal.aux.offset) ? "[OK]" : "[FAIL]");
+		UART_send_string(uart_msg);
+		
+		sprintf(uart_msg, "RxB AUX dac - Original: %u, EEPROM: %u %s\r\n",
+		backup_data.rxb_cal.aux.dac,
+		readback_data.rxb_cal.aux.dac,
+		(backup_data.rxb_cal.aux.dac == readback_data.rxb_cal.aux.dac) ? "[OK]" : "[FAIL]");
+		UART_send_string(uart_msg);
+		
+		// Verify and report RxB calibration - MAIN
+		sprintf(uart_msg, "RxB MAIN offset - Original: %d, EEPROM: %d %s\r\n",
+		backup_data.rxb_cal.main.offset,
+		readback_data.rxb_cal.main.offset,
+		(backup_data.rxb_cal.main.offset == readback_data.rxb_cal.main.offset) ? "[OK]" : "[FAIL]");
+		UART_send_string(uart_msg);
+		
+		sprintf(uart_msg, "RxB MAIN dac - Original: %u, EEPROM: %u %s\r\n",
+		backup_data.rxb_cal.main.dac,
+		readback_data.rxb_cal.main.dac,
+		(backup_data.rxb_cal.main.dac == readback_data.rxb_cal.main.dac) ? "[OK]" : "[FAIL]");
+		UART_send_string(uart_msg);
+		
+		UART_send_string("=== BACKUP COMPLETE ===\r\n");
+	}
+	else if (strcmp((const char *)uart_buffer, "CHECK_2283_BKP") == 0) {
+		// Backup structure to read from EEPROM
+		typedef struct {
+			rxPoints rxa_cal;
+			rxPoints rxb_cal;
+		} RxBackupData;
+		
+		RxBackupData readback_data;
+		
+		// Read from EEPROM at gstarRxBackup address
+		eeprom_read_block(&readback_data, gstarRxBackup, sizeof(RxBackupData));
+		
+		// Prepare strings for UART output
+		char uart_msg[100];
+		
+		UART_send_string("\r\n=== EEPROM BACKUP CHECK ===\r\n");
+		
+		// Report RxA calibration - AUX
+		sprintf(uart_msg, "RxA AUX offset: %d\r\n", readback_data.rxa_cal.aux.offset);
+		UART_send_string(uart_msg);
+		
+		sprintf(uart_msg, "RxA AUX ADC: %u\r\n", readback_data.rxa_cal.aux.dac);
+		UART_send_string(uart_msg);
+		
+		// Report RxA calibration - MAIN
+		sprintf(uart_msg, "RxA MAIN offset: %d\r\n", readback_data.rxa_cal.main.offset);
+		UART_send_string(uart_msg);
+		
+		sprintf(uart_msg, "RxA MAIN ADC: %u\r\n", readback_data.rxa_cal.main.dac);
+		UART_send_string(uart_msg);
+		
+		UART_send_string("\r\n");
+		
+		// Report RxB calibration - AUX
+		sprintf(uart_msg, "RxB AUX offset: %d\r\n", readback_data.rxb_cal.aux.offset);
+		UART_send_string(uart_msg);
+		
+		sprintf(uart_msg, "RxB AUX ADC: %u\r\n", readback_data.rxb_cal.aux.dac);
+		UART_send_string(uart_msg);
+		
+		// Report RxB calibration - MAIN
+		sprintf(uart_msg, "RxB MAIN offset: %d\r\n", readback_data.rxb_cal.main.offset);
+		UART_send_string(uart_msg);
+		
+		sprintf(uart_msg, "RxB MAIN ADC: %u\r\n", readback_data.rxb_cal.main.dac);
+		UART_send_string(uart_msg);
+		
+		UART_send_string("=== CHECK COMPLETE ===\r\n");
 	}
 	else
 	{
@@ -586,6 +976,32 @@ void UART_execute_cmd(void) {
 	UART_send_string("Done\n\r");
 
 }
+
+void dump_calibration_table(const char *label, uint8_t chain)
+{
+	char line[48];
+	int16_t whole, frac;
+	
+	CalibrationTable* table = (chain == 1) ? &txa_calibration_table : &txb_calibration_table;
+	
+	UART_send_string(label);
+	UART_send_string("\r\n");
+	UART_send_string("Idx   cbm(dBm)   adc\r\n");
+
+	for (uint8_t i = 0; i < CAL_TABLE_SIZE; i++)
+	{
+		// Reconstruct sign-safe decimal from the *10 scaled int16_t
+		whole = table->cbm[i] / 10;
+		frac  = table->cbm[i] % 10;
+		if (frac < 0) frac = -frac;  // keep fractional part positive for display
+
+		snprintf(line, sizeof(line), "%2u    %3d.%1d      %5u\r\n",
+		i, whole, frac, table->adc[i]);
+		UART_send_string(line);
+	}
+	UART_send_string("\r\n");
+}
+
 
 
 //////////////////////////////////////////////////////////////////////////
@@ -800,7 +1216,7 @@ void CID_setDAC(uint8_t chain, uint8_t TxRx, uint8_t DAC, uint16_t dac_val) {
 		struct Tx_status *SelectedChain = (chain == 1) ? &tx.TxA : &tx.TxB;
 
 		for (uint8_t i = DAC; i < 3; i++) {
-			uint16_t val = (remaining > DAC_MAX) ? DAC_MAX : remaining;
+			uint16_t val = (remaining > DAC_MAX_TX) ? DAC_MAX_TX : remaining;
 			SelectedChain->currentDACValue[i] = val;
 			remaining -= val;
 
@@ -817,7 +1233,7 @@ void CID_setDAC(uint8_t chain, uint8_t TxRx, uint8_t DAC, uint16_t dac_val) {
 		struct Rx_PLLs *SelectedChain = (chain == 1) ? &Rx_Chains.RxA : &Rx_Chains.RxB;
 
 		for (uint8_t i = DAC; i < 3 && remaining > 0; i++) {
-			uint16_t val = (remaining > DAC_MAX) ? DAC_MAX : remaining;
+			uint16_t val = (remaining > DAC_MAX_RX) ? DAC_MAX_RX : remaining;
 			SelectedChain->currentDACValue[i] = val;
 			remaining -= val;
 
@@ -872,7 +1288,7 @@ uint32_t CID_health_check() {
 	uint32_t health = 0;
 	
 	// ADC health (bits 0-1)
-	health = read_id_adc();
+	health = check_adc_health();
 	
 	// Network and temperature sensor IDs (bits 2-3)
 	health |= (read_id_w5500() << 2);
@@ -1124,6 +1540,13 @@ void CID_readsetpoint(uint8_t chain, uint8_t TxRx) {
 void CID_toggle_agc(uint8_t onoff) {
 	if (onoff <= 0x01)
 	{
+		if(onoff == 1)
+		{
+			tx.TxA.currentDACValue[0] = tx.TxA.currentDACValue[1] = tx.TxA.currentDACValue[2] = DAC_RESET_VALUE;
+			tx.TxB.currentDACValue[0] = tx.TxB.currentDACValue[1] = tx.TxB.currentDACValue[2] = DAC_RESET_VALUE;
+			setupDACTxA();
+			setupDACTxB();
+		}
 		Rx_Chains.RxA.agcEnable = Rx_Chains.RxB.agcEnable = tx.TxB.agcEnable = tx.TxA.agcEnable = onoff;
 		send_ack(0x14, ACK);
 	}
@@ -1199,21 +1622,44 @@ void CID_set_carrier(uint8_t chain, uint8_t carr_state) {
 		send_ack(0x1a, ACK);
 
 		struct Tx_status* SelectedChain = (chain == 1) ? &tx.TxA : &tx.TxB;
-
-		SelectedChain->isItOn = SelectedChain->agcEnable = carr_state;
-
-		uint16_t val = (carr_state == 0) ? 0 : DAC_MIN;
-		SelectedChain->currentDACValue[0] = val;
-		SelectedChain->currentDACValue[1] = val;
-		SelectedChain->currentDACValue[2] = val;
+		uint16_t DAC_val = (SelectedChain->Output == 0)?DAC_LOOP_TX:DAC_RESET_VALUE;
+		SelectedChain->isItOn = carr_state;
+		
+		//If carrier state is off, turn off agc before adapting DAC values. Otherwise value will change
+		if(carr_state == 0)
+		{
+			SelectedChain->agcEnable = 0;
+			DAC_val = 0;
+		}
+		
+		SelectedChain->currentDACValue[0] = DAC_val;
+		SelectedChain->currentDACValue[1] = DAC_val;
+		SelectedChain->currentDACValue[2] = DAC_val;
 
 		if (chain == 1)
-		setupDACTxA();
+		{
+			setupDACTxA();
+		}
 		else
-		setupDACTxB();
-		} else {
+		{
+			setupDACTxB();
+		}
+		
+		//If carrier stat is ON, turn on after you reset DAC values to DAC_RESET_VALUE to avoid getting caught in the log_detector fail function
+		if(carr_state == 1)
+		{
+			SelectedChain->agcEnable = (SelectedChain->Output == 0) ? 0 : carr_state; //If chain on loopback keep AGC off since no log detector on loopback path
+			SelectedChain->FaultyChain = SelectedChain->failedADCattempts = 0; //Reset faulty state
+		}
+		
+	}
+	
+	else {
 		send_ack(0x1a, WRONG_PARAM);
 	}
+	
+
+	
 }
 
 //void CID_read_eeprom() {
@@ -1237,10 +1683,7 @@ void CID_unit_power(uint8_t state)
 		send_ack(0x19, ACK);
 		if (state == 0)
 		{
-			w5500_disconnect_then_abort(SOCKET_0,500); //Wait for 500ms for mercifull disconection else close TCP connection bruttaly
-			*REST.PSU_CONTROL.PORT &= ~(1 << REST.PSU_CONTROL.PIN);
-			wdt_enable(WDTO_2S); // Trigger reset
-			while (1); // Wait for watchdog to fire
+			RebootHandling();
 		}
 		else if (state == 1)
 		{
@@ -1250,7 +1693,7 @@ void CID_unit_power(uint8_t state)
 	else send_ack(0x19, WRONG_PARAM);
 }
 
-void CID_returnEthConfig()
+void CID_returnEthConfig(void)
 {
 	send_ack(0x1D, ACK);
 
@@ -1259,17 +1702,20 @@ void CID_returnEthConfig()
 
 	uint64_t stitched = 0;
 
-	// Stitch bytes into one 64-bit integer (big-endian style)
+	// Stitch bytes into one 64-bit integer (big-endian)
 	for (uint8_t i = 0; i < 8; i++) {
 		stitched = (stitched << 8) | buffer[i];
 	}
 
-	// Convert stitched 64-bit into a byte array for transmission
-	uint8_t tx_bytes[8];
+	// Prepare transmission buffer: [0] = 0x1D, then 8 data bytes
+	uint8_t tx_bytes[9];
+	tx_bytes[0] = 0x1D; //CID byte
+
 	for (uint8_t i = 0; i < 8; i++) {
-		tx_bytes[7 - i] = (uint8_t)(stitched >> (i * 8));  // big-endian order
+		tx_bytes[i + 1] = (uint8_t)(stitched >> (56 - i * 8));  // big-endian order
 	}
-    w5500_TXsend(SOCKET_0, tx_bytes, sizeof(tx_bytes));	
+
+	w5500_TXsend(SOCKET_0, tx_bytes, sizeof(tx_bytes));
 }
 
 void CID_select_rx_path(uint8_t chain, uint8_t path)
@@ -1285,13 +1731,13 @@ void CID_select_rx_path(uint8_t chain, uint8_t path)
 			if (chain == 1) {
 				Rx_Chains.RxA.isItOn = Rx_Chains.RxA.agcEnable = 0;
 				
-				Rx_Chains.RxA.currentDACValue[2] = Rx_Chains.RxA.currentDACValue[1] = Rx_Chains.RxA.currentDACValue[0] = DAC_MIN;
+				Rx_Chains.RxA.currentDACValue[2] = Rx_Chains.RxA.currentDACValue[1] = Rx_Chains.RxA.currentDACValue[0] = DAC_MIN_RX;
 				setupDACRxA();
 			}
 			if (chain == 2) {
 				Rx_Chains.RxB.isItOn = Rx_Chains.RxB.agcEnable = 0;
 
-				Rx_Chains.RxB.currentDACValue[1] =	Rx_Chains.RxB.currentDACValue[2] = Rx_Chains.RxB.currentDACValue[0] = DAC_MIN;
+				Rx_Chains.RxB.currentDACValue[1] =	Rx_Chains.RxB.currentDACValue[2] = Rx_Chains.RxB.currentDACValue[0] = DAC_MIN_RX;
 				setupDACRxB();
 			}
 			return;
@@ -1859,6 +2305,29 @@ uint8_t eth_recv_command(uint8_t *RX_data)
 			case 0x1D: // return subnet and default gateway
 			{
 				CID_returnEthConfig();
+			}
+			break;
+			
+			case 0x1E: // load back-up gstar 2283 cal values
+			{
+				send_ack(CID,ACK); // Command not in use atm
+				
+				typedef struct {
+					rxPoints rxa_cal;
+					rxPoints rxb_cal;
+				} RxBackupData;
+				
+				RxBackupData readback_data;
+				
+				// Read from EEPROM at gstarRxBackup address
+				eeprom_read_block(&readback_data, gstarRxBackup, sizeof(RxBackupData));
+				
+				// Restore the calibration values
+				rxa_calibration = readback_data.rxa_cal;
+				rxb_calibration = readback_data.rxb_cal;
+				
+				write_calibration_points_to_eeprom(1);
+				write_calibration_points_to_eeprom(2);
 			}
 			break;
 

@@ -73,6 +73,28 @@ float extractFloat(uint8_t skipChars, volatile char uart_buffer[16])
 	return atof(number_buffer);
 }
 
+// Reads a line from UART into buf until CR/LF, null-terminated
+void read_uart_line(volatile char *buf, uint8_t maxlen)
+{
+	uint8_t i = 0;
+	uint8_t c;
+
+	do {
+		c = receive_uart();
+		if (c == '\r' || c == '\n') {
+			if (i == 0) {
+				continue;  // leftover/duplicate terminator, ignore and keep waiting
+			}
+			break;         // real end of line
+		}
+		if (i < maxlen - 1) {
+			buf[i++] = (char)c;
+		}
+	} while (1);
+
+	buf[i] = '\0';
+}
+
 long long extractFloatToLong(uint8_t skipChars,volatile char uart_buffer[16]) {
 	char number_buffer[12] = {0};  // Increased buffer size for safety
 	uint8_t num_index = 0;

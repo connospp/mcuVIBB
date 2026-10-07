@@ -3,21 +3,20 @@
 #
 #                   C E L E S T I A    A N T W E R P   (c)
 #
-# A simple to use MCU configuration tool
+# A simple to use MCU configuration tool for legacy V-IBB 1.0
 #
 # Author:   Magdy Abdel
 # Created:  20.10.2022
 # Version:  v0.1.0
 #
 #                                 Changelog
-#   v0.1.0 Initial version
+#   v0.1.0 Initial version 
 #
 ##
 APP_NAME = 'MCU Tool'
-APP_DESC = 'A simple to use MCU configuration tool'
-VERS = '0.2.0'
-#YEAR = 2022
-YEAR = 2025
+APP_DESC = 'A simple to use MCU configuration tool for legacy V-IBB 1.0'
+VERS = '0.1.0'
+YEAR = 2022
 
 import logging
 import sys
@@ -81,7 +80,6 @@ class MCU_FMT(enum.Enum):
     # CMD_SETPOINT_READ   = ('BBB',               0x15)
     CMD_ETHERNET_RESET  = ('B',                 0x16)
     # CMD_DAC_READ        = ('BBB',               0x17)
-    CMD_SUBMASK         = ('B',                 0x1D)
     # Responses
     RES_ACK             = ('BBB',               0x00)
     RES_STATUS          = ('B'+'B'*5,           0x02)
@@ -90,7 +88,6 @@ class MCU_FMT(enum.Enum):
     RES_TEMP            = ('BbB',               0x0C) # first byte is value and second byte should be shifted by 6 and divided by 4
     RES_ADC             = ('BBBH',              0x0E)
     RES_VERSION         = ('BBBB',              0x10)
-    RES_SUBMASK         = ('BBBBBBBBB',         0x1D)
 
     # Define children of MCU_FMT: format and id
     def __init__(self, format:str, id:typing.Union[int, typing.List[int]]) -> None:
@@ -289,8 +286,6 @@ class MCU():
         # Frontend information
         self.version:str = None
         self.sn:list[str] = [None, None]
-        self.subnet:str  = MCU_SUBNET
-        self.defgate:str = MCU_GATEWAY
         
         # Status
         self.reboot = False
@@ -348,12 +343,11 @@ class MCU():
         responses:list[MCU_response] = []
         if request != None:
             if self.connected:
-                logger.info(f"Sending request (CID=0x{cmd.cid.to_bytes(1, MCU_BYTEORDER, signed=False).hex()}) to MCU ({self.addr}:{self.port}): {request.hex()} (len={cmd.length})")
+                logger.info(f"Sending request (CID=0x{cmd.cid}) to MCU ({self.addr}:{self.port}): {request.hex()} (len={cmd.length})")
                 try:
-                    time.sleep(0.5)
                     self.sock.sendall(request)
                 except Exception as err:
-                    logger.error(f"Socket error while trying to send request (CID=0x{cmd.cid.to_bytes(1, MCU_BYTEORDER, signed=False).hex()}) to MCU ({self.addr}:{self.port}): {err}")
+                    logger.error(f"Socket error while trying to send request (CID=0x{cmd.cid}) to MCU ({self.addr}:{self.port}): {err}")
                 # Loop that waits for bytes until everything is received
                 while self.connected:
                     # Get bytes from socket
@@ -418,8 +412,6 @@ class MCU():
                 logger.error(f"Unable to send request to MCU ({self.addr}:{self.port}): Not connected.")
         else:
             logger.error(f"Unable to send request to MCU ({self.addr}:{self.port}): Request is empty.")
-        # Useful debug info
-        logger.info(f"RETURN send(): latest_only={latest_only} len_responses={len(responses)}")
         return responses[-1] if latest_only and len(responses) != 0 else responses
 
     # Get response from a socket
@@ -429,7 +421,7 @@ class MCU():
             # Set a time-out period of on all blocking operations on the socket, in 
             # particular the recv() call. Assumption is that the mcu sends all of 
             # its answer(s) in this period.
-            self.sock.settimeout(1.0)
+            self.sock.settimeout(0.5)
             size = 4096 # read buffer size in bytes
             try:
                 response = self.sock.recv(size)
@@ -439,7 +431,6 @@ class MCU():
                     self.close()
                     self.connected = False
             except socket.timeout:
-                # Last receipt is always a timeout (hence no error), in this way it is sure that everything has been received
                 logger.debug(f"No response from MCU ({self.addr}:{self.port}): Receive timeout.")
                 response = None
             if response != None:
@@ -465,12 +456,11 @@ class MainWindow(QMainWindow):
         self.mcu = MCU()
         
         # Status
-        self.lbl_status = QLabel("{APP_NAME}")
-        self.lbl_status.setObjectName('lbl_status')
-        self.lbl_status.setTextFormat(Qt.RichText)
-        self.lbl_status.setContentsMargins(9, 0, 9, 3)  # left, top, right, bottom margins (pixels) to use around layout
-        self.ui.statusbar.addPermanentWidget(self.lbl_status)
-
+        lbl_status = QLabel(self.ui.statusbar)
+        lbl_status.setObjectName('lbl_status')
+        lbl_status.setTextFormat(Qt.RichText)
+        lbl_status.setContentsMargins(9, 0, 9, 3)
+        self.ui.statusbar.addPermanentWidget(lbl_status)
         self.status = Status(self, self.mcu)
         self.status.update()
 
@@ -502,20 +492,12 @@ class MainWindow(QMainWindow):
         self.loglevel_group.addAction(self.ui.actionCritical)
 
         # Setup button click signals and slots
-        self.ui.btn_connect.clicked.connect(self.btn_connect_mcu)      # action when pressing button Connect
-        self.ui.btn_configure.clicked.connect(self.btn_configure_mcu)  # action when pressing button Configure
+        self.ui.btn_connect.clicked.connect(self.connect_mcu)
+        self.ui.btn_configure.clicked.connect(self.configure_mcu)
 
         # Setup menu action click signals and slots
         self.loglevel_group.triggered.connect(self.setloglevel)
         self.ui.actionHelp.triggered.connect(self.showHelp)
-
-    def btn_connect_mcu(self):
-        self.connect_mcu()
-        if self.mcu.connected:
-            self.ui.line_ip.setText(self.mcu.addr)
-            self.ui.line_port.setText(str(self.mcu.port))
-            self.ui.line_subnet.setText(self.mcu.subnet)
-            self.ui.line_defgate.setText(self.mcu.defgate)
 
     # Connect/disconnect to/from MCU and request information when connected
     def connect_mcu(self):
@@ -525,7 +507,7 @@ class MainWindow(QMainWindow):
             # Disconnect from MCU
             closed = self.mcu.close()
             if closed:
-                self.status.message(f"MCU disconnected!", 0)
+                self.status.message(f"MCU disconnected!", 3000)
         # Disconnected
         else:
             # Configure host address and port
@@ -537,21 +519,13 @@ class MainWindow(QMainWindow):
             if configured:
                 self.mcu.connect()
             if self.mcu.connected:
-                self.status.message(f"MCU connected!", 0)
+                self.status.message(f"MCU connected!", 3000)
                 # Request MCU information (version, serial numbers)
                 # Version
                 cmd = MCU_command(MCU_FMT.CMD_VERSION)
                 res = self.mcu.send(cmd, MCU_FMT.RES_VERSION).unpack_msg(True)
                 self.mcu.version = f'{res[0]}.{res[1]}.{res[2]}'
                 logger.info(f"MCU version: {self.mcu.version}")
-                # Subnet mask and default gateway
-                # VIB-552: added to know the actual subnet mask and default gateway
-                cmd = MCU_command(MCU_FMT.CMD_SUBMASK)
-                res = self.mcu.send(cmd, MCU_FMT.RES_SUBMASK).unpack_msg(True)
-                self.mcu.subnet  = f'{res[0]}.{res[1]}.{res[2]}.{res[3]}'
-                self.mcu.defgate = f'{res[4]}.{res[5]}.{res[6]}.{res[7]}'
-                logger.info(f"MCU subnet mask:     {self.mcu.subnet}")
-                logger.info(f"MCU default gateway: {self.mcu.defgate}")
                 # Serial numbers
                 for n in [0, 1]:
                     cmd = MCU_command(MCU_FMT[f'CMD_SN'], cid_index=n)
@@ -561,7 +535,7 @@ class MainWindow(QMainWindow):
         self.status.update()
 
     # Configure MCU
-    def btn_configure_mcu(self):
+    def configure_mcu(self):
         if self.mcu.connected:
             ip = self.ui.line_ip.text()
             port = self.ui.line_port.text()
@@ -571,40 +545,31 @@ class MainWindow(QMainWindow):
             if ip != '' and port != '' and subnet != ''  and default_gateway != '' :
                 # Check IP
                 ip_match = regex_ip.exactMatch(ip)
-                logger.info(f"Valid IP address: {ip_match} {ip}")
+                logger.debug(f"Valid IP address: {ip_match}")
                 # Check port
                 port_match = port.isdecimal()
-                logger.info(f"Valid port: {port_match} {port}")
+                logger.debug(f"Valid port: {port_match}")
                 # Check subnet
                 subnet_match = regex_ip.exactMatch(subnet)
-                logger.info(f"Valid subnet: {subnet_match} {subnet}")
+                logger.debug(f"Valid subnet: {subnet_match}")
                 # Check default gateway
                 defgate_match = regex_ip.exactMatch(default_gateway)
-                logger.info(f"Valid default gateway: {defgate_match} {default_gateway}")
+                logger.debug(f"Valid default gateway: {defgate_match}")
                 if ip_match and subnet_match and defgate_match:
                     # Change port first because IP change will trigger watchdog
-                    port_orig = self.mcu.port
                     cmd_port    = MCU_command(MCU_FMT.CMD_PORT, int(port))
                     res:MCU_ack = self.mcu.send(cmd_port, MCU_FMT.RES_ACK)
                     if res.ack() == MCU_ack.ID.ACK:
-                        self.ui.line_hostport.setText(str(port))
-                        if port != port_orig :
-                            self.mcu.reboot = True
-                            self.connect_mcu()    # disconnect
-                            time.sleep(5.0)
-                            self.connect_mcu()    # re-connect
-                    self.status.message(f"IP port: {str(res)}", 0)
-                    addr_orig = self.mcu.addr
+                        self.mcu.reboot = True
+                    self.status.message(f"IP port: {str(res)}", 3000)
                     cmd_ip      = MCU_command(MCU_FMT.CMD_IP, [int(b) for b in ip.split('.')] + [int(b) for b in subnet.split('.')] + [int(b) for b in default_gateway.split('.')])
                     res:MCU_ack = self.mcu.send(cmd_ip, MCU_FMT.RES_ACK)
                     if res.ack() == MCU_ack.ID.ACK:
-                        self.ui.line_host.setText(str(ip))
                         self.mcu.reboot = True
-                    self.status.message(f"IP settings: {str(res)}", 0)
+                    self.status.message(f"IP settings: {str(res)}", 3000)
                     self.status.update()
                     # Disconnect from the MCU
-                    self.connect_mcu()    # disconnect
-                    self.status.message(f"WARNING: Wait 20 seconds before reconnecting", 0)
+                    self.connect_mcu()
             else:
                 logger.warning(f"Unable to connect to MCU: Some fields are empty!")  
         else:
@@ -656,28 +621,22 @@ class Status():
         return msg
 
     # Update statusbar message and other UI fields
-    # VIB-552: GUI updates (like lbl.setText()) ONLY are activated when leaving a button function
-    #          (not during execution of the button function)
     def update(self):
-        lbl:QLabel = self.main.lbl_status
-
-        lbl.setText(str(self))
+        lbl:QLabel = self.main.ui.statusbar.findChild(QLabel, 'lbl_status')
+        if lbl != None:
+            lbl.setText(str(self))
         if self.mcu.connected:
             self.main.ui.line_host.setEnabled(False)
             self.main.ui.line_hostport.setEnabled(False)
             self.main.ui.grp_ip.setEnabled(True)
-            self.main.ui.btn_connect.setText(self.main.tr('Disconnect'))  # Set Disconnect text in button
-            logger.info(f"state = Connected")
+            self.main.ui.btn_connect.setText(self.main.tr('Disconnect'))
         else:
             self.main.ui.line_host.setEnabled(True)
             self.main.ui.line_hostport.setEnabled(True)
             self.main.ui.grp_ip.setEnabled(False)
-            self.main.ui.btn_connect.setText(self.main.tr('Connect'))     # Set Connect test in button
-            logger.info(f"state = Disconnected")
+            self.main.ui.btn_connect.setText(self.main.tr('Connect'))
 
-    # Display temporary message in statusbar
-    # VIB-552: GUI updates (like showMessage()) ONLY are activated when leaving a button function
-    #          (not during execution of the button function)
+    # Display message in statusbar
     def message(self, msg:str, timeout:int=0):
         self.main.ui.statusbar.showMessage(msg, timeout)
 
@@ -690,7 +649,7 @@ if __name__ == "__main__":
     try:
         # Initialise logger
         logFormatter = logging.Formatter("%(asctime)s [%(levelname)s]  \t%(message)s")
-        logPath = os.path.join('logs', f'mcu_configuration_{time.strftime("%Y%m%d_%H%M%S")}.log')
+        logPath = os.path.join('logs', f'mcu_configuration_legacy_{time.strftime("%Y%m%d_%H%M%S")}.log')
         os.makedirs(os.path.dirname(logPath), exist_ok=True)
         fileHandler = logging.FileHandler(logPath, mode='w')
         fileHandler.setFormatter(logFormatter)

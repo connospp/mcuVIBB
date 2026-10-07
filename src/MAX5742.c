@@ -16,11 +16,9 @@ void send_DAC_package(volatile uint8_t *port, uint8_t pin,uint8_t channel,volati
 	uint16_t command = 0x0000;        // Start with all zeros
 	SPCR |= (1 << CPHA);			// Change SPI mode
 	
-	command |= (channel << 12);        // Channel selection (bits 11–8)
-	command |= (data & 0x0FFF);       // 12-bit DAC data (bits 11–0)
+	command |= (channel << 12);        // Channel selection (bits 11â€“8)
+	command |= (data & 0x0FFF);       // 12-bit DAC data (bits 11â€“0)
 
-	//uint8_t sreg = SREG; //store ISR state
-	//cli();  // Disable ISR while setting DAC
 	uint8_t high_byte = (command >> 8) & 0xFF;  // Extract the high byte
 	uint8_t low_byte = command & 0xFF;          // Extract the low byte
 	
@@ -31,7 +29,6 @@ void send_DAC_package(volatile uint8_t *port, uint8_t pin,uint8_t channel,volati
 	
 	// Send low byte
 	send_spi(low_byte);
-	//SREG = sreg; //Enable ISR
 
 	// Disable chip select (SS)
 	*port |= (1 << pin);

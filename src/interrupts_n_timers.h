@@ -44,6 +44,7 @@ void setup_ext_interrupt(void);
 void delay_ms(uint16_t delay);
 void interruptHandler(void);
 void powerHandling(void);
+void RebootHandling(void);
 
 ISR(TIMER1_COMPA_vect);
 ISR(TIMER2_COMPA_vect);

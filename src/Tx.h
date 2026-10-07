@@ -42,12 +42,16 @@ struct Tx_status{
 	volatile uint8_t isItOn;			// 1=ON 0=OFF
 	volatile uint8_t health;	        // 1 = BAD 2 = GOOD
 	volatile uint16_t targetADC;		// AGC ADC value you wish for
+	volatile uint16_t minAllowedADC;		// AGC ADC that lower than that, ADC or Log detector has problem
 	volatile uint16_t currentADC;		// AGC ADC real value
 	volatile int16_t carrierPower;
 	volatile uint16_t currentDACValue[3]; // 3 DAC values per chain
 	volatile uint8_t *DAC_PortCS[3];
 	uint8_t DAC_CS[3];
 	const uint8_t dacChan[3];
+	volatile int8_t FaultyChain; //If Fault detected set Flag to 1. Avoid transmitting at max power if Log det or ADC is faulty
+	volatile int8_t failedADCattempts;
+	volatile int8_t uncalibratedFreq;
 };
 
 struct Tx_chains {

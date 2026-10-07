@@ -12,10 +12,11 @@
 #include <SPI.h>
 
 #define MAX11636_RESET_CMD 0b00010000   // Reset command
+//#define MAX11636_CLR_FIFO_CMD 0b00001000  // Clear FIFO command
 #define MAX11636_AVERAGE_CMD 0b00110000   // Averaging: max averaging, no scan "32sample averaging = 0b00111100" "8sample averaging = 0b00110100"  "4sample averaging = 0b00110000" "1sample no averaging = 0b00100000"
 
 #define MAX11636_SETUP_CMD_TX 0b01000100   // Setup: clock-timed, external ref, unipolar
-#define MAX11636_CONV_REG_CMD_TX 0b10001000   // Conversion: get CH1 result, CH0–CH1 range
+#define MAX11636_CONV_REG_CMD_TX 0b10001000   // Conversion: get CH1 result, CH0/CH1 range
 
 #define MAX11636_SETUP_CMD_RX 0b01000110;     // MSB 01 Setup command . 00 clock timed. 10 Ref . 10 Unipolar conf follows LSB
 #define MAX11636_UNIPOLAR_RX 0b11000000;  // MSB 1 Input AIN0 AIN1 used as unipolar. 1 Input AIN2 AIN3 used as unipolar. 0 AIN4 AIN5.  0 AIN6 AIN7. rest "dontcare" LSB
@@ -27,7 +28,7 @@ void setupADCRx(void);
 void readTXPower(void);
 void readRXPower(void);
 void send_package2x8(volatile uint8_t *port, uint8_t pin,uint8_t data,uint8_t data2);
-uint8_t read_id_adc(void);
+uint8_t check_adc_health(void);
 void requestNewSample(bool isTx);
 
 #endif /* MAX11636_H_ */
